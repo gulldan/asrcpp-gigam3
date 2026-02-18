@@ -1,0 +1,18 @@
+# VCS
+.git
+.gitignore
+
+# CMake/Build artifacts
+build/
+cmake_test_discovery_*.json
+CMakeUserPresets.json
+
+# Local/dev files
+uploads/
+docs/
+tests/
+.idea/
+.vscode/
+.pytest_cache/
+__pycache__/
+*.log

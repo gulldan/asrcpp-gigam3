@@ -1,0 +1,105 @@
+# syntax=docker/dockerfile:1.7
+#
+# Build from repository root:
+#   docker build -f Dockerfile.cuda -t asr-server-cpp:cuda .
+
+# ============================================
+# Stage 1: Toolchain base (CUDA)
+# ============================================
+FROM nvidia/cuda:12.8.0-devel-ubuntu24.04 AS build-base
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    pkg-config \
+    wget \
+    ca-certificates \
+    libssl-dev \
+    zlib1g-dev \
+    libjsoncpp-dev \
+    uuid-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# ============================================
+# Stage 2: Dependency warm-up (CUDA)
+# ============================================
+FROM build-base AS deps-builder
+
+COPY CMakeLists.txt CMakePresets.json ./
+
+RUN set -eux; \
+    mkdir -p src; \
+    for f in config audio vad recognizer handler metrics server; do \
+      printf 'int asr_stub_%s(void) { return 0; }\n' "${f}" > "src/${f}.cpp"; \
+    done; \
+    printf 'int main(void) { return 0; }\n' > src/main.cpp
+
+RUN cmake --preset cuda && \
+    cmake --build build/cuda --parallel $(nproc)
+
+# ============================================
+# Stage 3: Final app build (CUDA)
+# ============================================
+FROM build-base AS builder
+
+WORKDIR /build
+
+COPY --from=deps-builder /build/build/ /build/build/
+
+COPY CMakeLists.txt CMakePresets.json ./
+COPY include/ include/
+COPY src/ src/
+COPY third_party/ third_party/
+COPY static/ static/
+
+RUN cmake --preset cuda && \
+    cmake --build build/cuda --parallel $(nproc) --target asr-server
+
+# ============================================
+# Stage 4: Runtime (CUDA)
+# ============================================
+FROM nvidia/cuda:12.8.0-runtime-ubuntu24.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    libcudnn9-cuda-12 \
+    ca-certificates \
+    libssl3 \
+    zlib1g \
+    libjsoncpp25 \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy binary
+COPY --from=builder /build/build/cuda/asr-server /app/asr-server
+
+# Copy onnxruntime shared library (downloaded by FetchContent)
+COPY --from=builder /build/build/_shared_deps/onnxruntime/onnxruntime-linux-x64-gpu-*/lib/libonnxruntime* /usr/local/lib/
+RUN ldconfig
+
+# Copy static files and models
+COPY static/ /app/static/
+COPY models/ /app/models/
+
+ENV PROVIDER=cuda
+ENV NUM_THREADS=4
+ENV HOST=0.0.0.0
+ENV HTTP_PORT=8081
+ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+
+EXPOSE 8081
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD wget -q --spider http://localhost:8081/health || exit 1
+
+USER 65532
+ENTRYPOINT ["/app/asr-server"]

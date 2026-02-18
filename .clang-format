@@ -1,0 +1,22 @@
+BasedOnStyle: Google
+IndentWidth: 2
+UseTab: Never
+ColumnLimit: 110
+
+AllowShortBlocksOnASingleLine: Empty
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+
+DerivePointerAlignment: false
+PointerAlignment: Left
+
+SpaceBeforeParens: ControlStatements
+
+AlignConsecutiveAssignments: Consecutive
+AlignConsecutiveDeclarations: Consecutive
+
+IncludeBlocks: Regroup
+SortIncludes: true
+SortUsingDeclarations: true
+
+ReflowComments: true

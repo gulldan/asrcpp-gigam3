@@ -1,0 +1,414 @@
+{
+  "tests": 72,
+  "name": "AllTests",
+  "testsuites": [
+    {
+      "name": "Config",
+      "tests": 8,
+      "testsuite": [
+        {
+          "name": "DefaultValues",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 29
+        },
+        {
+          "name": "FromEnvOverrides",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 50
+        },
+        {
+          "name": "MissingEnvUsesDefaults",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 81
+        },
+        {
+          "name": "InvalidEnvValues",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 95
+        },
+        {
+          "name": "PortOverflowUsesDefault",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 107
+        },
+        {
+          "name": "PortNegativeUsesDefault",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 113
+        },
+        {
+          "name": "DefaultPoolValues",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 214
+        },
+        {
+          "name": "FromEnvPoolOverrides",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 220
+        }
+      ]
+    },
+    {
+      "name": "ConfigValidation",
+      "tests": 17,
+      "testsuite": [
+        {
+          "name": "RejectsZeroPort",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 119
+        },
+        {
+          "name": "DefaultsPass",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 125
+        },
+        {
+          "name": "RejectsZeroSampleRate",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 130
+        },
+        {
+          "name": "RejectsNegativeSampleRate",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 136
+        },
+        {
+          "name": "ClampsSampleRate",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 142
+        },
+        {
+          "name": "RejectsZeroWindowSize",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 150
+        },
+        {
+          "name": "RejectsContextGEWindow",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 156
+        },
+        {
+          "name": "ClampsThreshold",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 162
+        },
+        {
+          "name": "FixesMaxAudioSec",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 170
+        },
+        {
+          "name": "ClampsThreads",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 178
+        },
+        {
+          "name": "ValidateServerThreads",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 185
+        },
+        {
+          "name": "VadMaxSpeechMustExceedMinSpeech",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 192
+        },
+        {
+          "name": "ClampsMinSilence",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 200
+        },
+        {
+          "name": "ClampsMinSpeech",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 207
+        },
+        {
+          "name": "PoolSizeAutoDefault",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 229
+        },
+        {
+          "name": "MaxConcurrentAutoDefault",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 236
+        },
+        {
+          "name": "ClampsPoolSize",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_config.cpp",
+          "line": 243
+        }
+      ]
+    },
+    {
+      "name": "Audio",
+      "tests": 13,
+      "testsuite": [
+        {
+          "name": "DecodeMono16kHz",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_audio.cpp",
+          "line": 53
+        },
+        {
+          "name": "RejectStereo",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_audio.cpp",
+          "line": 68
+        },
+        {
+          "name": "RejectInvalid",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_audio.cpp",
+          "line": 76
+        },
+        {
+          "name": "RejectEmpty",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_audio.cpp",
+          "line": 81
+        },
+        {
+          "name": "ResampleFrom44100",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_audio.cpp",
+          "line": 86
+        },
+        {
+          "name": "ResampleFrom48000",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_audio.cpp",
+          "line": 97
+        },
+        {
+          "name": "NoResampleAt16000",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_audio.cpp",
+          "line": 107
+        },
+        {
+          "name": "DurationCalculation",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_audio.cpp",
+          "line": 116
+        },
+        {
+          "name": "ComputeRms",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_audio.cpp",
+          "line": 124
+        },
+        {
+          "name": "ComputeRmsSilence",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_audio.cpp",
+          "line": 139
+        },
+        {
+          "name": "ComputeRmsEmpty",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_audio.cpp",
+          "line": 144
+        },
+        {
+          "name": "NormalizationRange",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_audio.cpp",
+          "line": 149
+        },
+        {
+          "name": "DurationGuardAllowsNormal",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_audio.cpp",
+          "line": 161
+        }
+      ]
+    },
+    {
+      "name": "Vad",
+      "tests": 7,
+      "testsuite": [
+        {
+          "name": "Construction",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_vad.cpp",
+          "line": 56
+        },
+        {
+          "name": "SilenceProducesNoSegments",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_vad.cpp",
+          "line": 63
+        },
+        {
+          "name": "ResetClearsState",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_vad.cpp",
+          "line": 78
+        },
+        {
+          "name": "FlushPendingSpeech",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_vad.cpp",
+          "line": 95
+        },
+        {
+          "name": "FrontAndPop",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_vad.cpp",
+          "line": 118
+        },
+        {
+          "name": "WindowSizeEnforcement",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_vad.cpp",
+          "line": 144
+        },
+        {
+          "name": "IsSpeechFlag",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_vad.cpp",
+          "line": 156
+        }
+      ]
+    },
+    {
+      "name": "Recognizer",
+      "tests": 5,
+      "testsuite": [
+        {
+          "name": "Construction",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_recognizer.cpp",
+          "line": 33
+        },
+        {
+          "name": "RecognizeSilence",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_recognizer.cpp",
+          "line": 40
+        },
+        {
+          "name": "RecognizeEmpty",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_recognizer.cpp",
+          "line": 54
+        },
+        {
+          "name": "NonMovable",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_recognizer.cpp",
+          "line": 65
+        },
+        {
+          "name": "ThreadSafety",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_recognizer.cpp",
+          "line": 73
+        }
+      ]
+    },
+    {
+      "name": "Handler",
+      "tests": 4,
+      "testsuite": [
+        {
+          "name": "OnAudioInterim",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_handler.cpp",
+          "line": 58
+        },
+        {
+          "name": "OnRecognizeFlush",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_handler.cpp",
+          "line": 83
+        },
+        {
+          "name": "OnReset",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_handler.cpp",
+          "line": 104
+        },
+        {
+          "name": "MultipleSessionsOnConnection",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_handler.cpp",
+          "line": 124
+        }
+      ]
+    },
+    {
+      "name": "MetricsTest",
+      "tests": 15,
+      "testsuite": [
+        {
+          "name": "Initialization",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_metrics.cpp",
+          "line": 20
+        },
+        {
+          "name": "ObserveTTFR",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_metrics.cpp",
+          "line": 24
+        },
+        {
+          "name": "ObserveSegment",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_metrics.cpp",
+          "line": 29
+        },
+        {
+          "name": "ConnectionOpenClose",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_metrics.cpp",
+          "line": 33
+        },
+        {
+          "name": "SessionStartEnd",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_metrics.cpp",
+          "line": 40
+        },
+        {
+          "name": "RecordResult",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_metrics.cpp",
+          "line": 45
+        },
+        {
+          "name": "RecordSilence",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_metrics.cpp",
+          "line": 50
+        },
+        {
+          "name": "ErrorTypes",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_metrics.cpp",
+          "line": 54
+        },
+        {
+          "name": "RecordAudioLevel",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_metrics.cpp",
+          "line": 60
+        },
+        {
+          "name": "SetSpeechRatio",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_metrics.cpp",
+          "line": 65
+        },
+        {
+          "name": "ObserveRequest",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_metrics.cpp",
+          "line": 69
+        },
+        {
+          "name": "PrometheusSerialize",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_metrics.cpp",
+          "line": 74
+        },
+        {
+          "name": "AllPipelineMetricsRegistered",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_metrics.cpp",
+          "line": 93
+        },
+        {
+          "name": "AllConnectionMetricsRegistered",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_metrics.cpp",
+          "line": 113
+        },
+        {
+          "name": "AllRecognitionMetricsRegistered",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_metrics.cpp",
+          "line": 128
+        }
+      ]
+    },
+    {
+      "name": "Integration",
+      "tests": 3,
+      "testsuite": [
+        {
+          "name": "WavFileToText",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_integration.cpp",
+          "line": 76
+        },
+        {
+          "name": "EmptyFileError",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_integration.cpp",
+          "line": 97
+        },
+        {
+          "name": "StreamingSimulation",
+          "file": "\/mnt\/data\/asrcpp-gigam3\/tests\/test_integration.cpp",
+          "line": 102
+        }
+      ]
+    }
+  ]
+}

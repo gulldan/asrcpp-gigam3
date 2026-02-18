@@ -1,0 +1,12 @@
+# TSAN suppressions for known third-party library races
+# These are races inside ONNX Runtime and sherpa-onnx that we cannot fix.
+# See: https://github.com/microsoft/onnxruntime/issues
+
+# ONNX Runtime internal thread pool and session state
+race:libonnxruntime.so
+race:onnxruntime::*
+race:OrtApis::*
+
+# sherpa-onnx inference paths
+race:SherpaOnnx*
+race:sherpa_onnx::*
