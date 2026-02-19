@@ -12,3 +12,4 @@ wheels/
 .coverage
 .pytest_cache
 cmake_test_discovery*
+dhat.out.txt
