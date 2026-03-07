@@ -168,9 +168,9 @@ void Config::validate() {
     throw ConfigError("max_ws_message_bytes must be positive");
   }
 
-  // Pool size: 0 = auto (= threads)
+  // Pool size: default = 1
   if (recognizer_pool_size == 0) {
-    recognizer_pool_size = static_cast<int>(threads);
+    recognizer_pool_size = 1;
   }
   if (recognizer_pool_size < 1 || recognizer_pool_size > 256) {
     spdlog::warn("Clamping recognizer_pool_size {} to [1, 256]", recognizer_pool_size);

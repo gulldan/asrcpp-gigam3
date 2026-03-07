@@ -38,7 +38,7 @@ struct Config {
   int   vad_context_size = 64;
 
   // Concurrency
-  int    recognizer_pool_size    = 0;  // 0 = auto = threads
+  int    recognizer_pool_size    = 1;  // default = 1
   size_t max_concurrent_requests = 0;  // 0 = auto = threads * 2
 
   // Audio
