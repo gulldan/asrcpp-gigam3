@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -39,6 +40,8 @@ class ASRSession {
   // Handle connection close — clean up session metrics
   void on_close();
 
+  [[nodiscard]] bool is_speech() const;
+
  private:
   using SteadyClock = std::chrono::steady_clock;
   using TimePoint   = SteadyClock::time_point;
@@ -57,11 +60,17 @@ class ASRSession {
   // Append messages from VAD segments to out_messages_
   void process_vad_segments();
 
+  // Periodic fallback decode for live stream chunks when VAD does not
+  // finalize any segment.
+  void process_live_chunk_fallback();
+
+  [[nodiscard]] bool has_final_messages() const;
+
   // Pad remaining pending samples and flush VAD
   void flush_pending();
 
   // Record session-level metrics, append done message, and reset
-  void finalize_session();
+  void finalize_session(const char* reason);
 
   void reset_session();
 
@@ -76,21 +85,24 @@ class ASRSession {
 
   // Sub-window accumulator
   std::vector<float> pending_;
+  std::vector<float> live_chunk_;
 
   // Session state
   TimePoint start_ts_;
   TimePoint first_result_ts_;
-  bool      has_first_result_       = false;
-  int       segments_               = 0;
-  int       silence_segments_       = 0;
-  double    decode_sec_             = 0.0;
-  double    preprocess_sec_         = 0.0;
-  size_t    audio_samples_          = 0;
-  size_t    total_samples_received_ = 0;
-  bool      session_active_         = false;
-  bool      max_duration_exceeded_  = false;
-  int       chunks_                 = 0;
-  size_t    bytes_                  = 0;
+  bool      has_first_result_        = false;
+  int       segments_                = 0;
+  int       silence_segments_        = 0;
+  double    decode_sec_              = 0.0;
+  double    preprocess_sec_          = 0.0;
+  size_t    audio_samples_           = 0;
+  size_t    total_samples_received_  = 0;
+  size_t    last_live_flush_samples_ = 0;
+  bool      session_active_          = false;
+  bool      max_duration_exceeded_   = false;
+  int       chunks_                  = 0;
+  size_t    bytes_                   = 0;
+  uint64_t  session_seq_             = 0;
 };
 
 }  // namespace asr

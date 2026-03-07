@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <exception>
 #include <string>
 
 namespace asr {
@@ -64,9 +65,11 @@ size_t get_env_size(const char* name, size_t default_val) {
 
 Config Config::from_env() {
   Config cfg;
-  cfg.host                    = get_env("HOST", cfg.host);
-  cfg.port                    = get_env_uint16("HTTP_PORT", cfg.port);
-  cfg.threads                 = get_env_size("THREADS", cfg.threads);
+  cfg.host    = get_env("HOST", cfg.host);
+  cfg.port    = get_env_uint16("HTTP_PORT", cfg.port);
+  cfg.threads = get_env_size("THREADS", cfg.threads);
+  cfg.idle_connection_timeout_sec =
+      get_env_size("IDLE_CONNECTION_TIMEOUT_SEC", cfg.idle_connection_timeout_sec);
   cfg.model_dir               = get_env("MODEL_DIR", cfg.model_dir);
   cfg.vad_model               = get_env("VAD_MODEL", cfg.vad_model);
   cfg.provider                = get_env("PROVIDER", cfg.provider);
@@ -82,6 +85,7 @@ Config Config::from_env() {
   cfg.silence_threshold       = get_env_float("SILENCE_THRESHOLD", cfg.silence_threshold);
   cfg.min_audio_sec           = get_env_float("MIN_AUDIO_SEC", cfg.min_audio_sec);
   cfg.max_audio_sec           = get_env_float("MAX_AUDIO_SEC", cfg.max_audio_sec);
+  cfg.live_flush_interval_sec = get_env_float("LIVE_FLUSH_INTERVAL_SEC", cfg.live_flush_interval_sec);
   cfg.max_upload_bytes        = get_env_size("MAX_UPLOAD_BYTES", cfg.max_upload_bytes);
   cfg.max_ws_message_bytes    = get_env_size("MAX_WS_MESSAGE_BYTES", cfg.max_ws_message_bytes);
   cfg.recognizer_pool_size    = get_env_int("RECOGNIZER_POOL_SIZE", cfg.recognizer_pool_size);
@@ -131,7 +135,19 @@ void Config::validate() {
     min_audio_sec = 0.0f;
   }
 
-  if (max_audio_sec <= min_audio_sec) {
+  if (live_flush_interval_sec < 0.0f) {
+    spdlog::warn("Clamping live_flush_interval_sec {} to 0 (disabled)", live_flush_interval_sec);
+    live_flush_interval_sec = 0.0f;
+  } else if (live_flush_interval_sec > 0.0f && live_flush_interval_sec < 0.2f) {
+    spdlog::warn("live_flush_interval_sec ({}) too small, clamping to 0.2", live_flush_interval_sec);
+    live_flush_interval_sec = 0.2f;
+  }
+
+  // 0 disables the session duration limit for WebSocket live mode.
+  if (max_audio_sec < 0.0f) {
+    spdlog::warn("Clamping max_audio_sec {} to 0 (unlimited)", max_audio_sec);
+    max_audio_sec = 0.0f;
+  } else if (max_audio_sec > 0.0f && max_audio_sec <= min_audio_sec) {
     spdlog::warn("max_audio_sec ({}) must be > min_audio_sec ({}), fixing", max_audio_sec, min_audio_sec);
     max_audio_sec = min_audio_sec + 30.0f;
   }

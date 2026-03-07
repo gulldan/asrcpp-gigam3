@@ -74,8 +74,9 @@ FetchContent_Declare(drogon
     GIT_SHALLOW    TRUE
 )
 
-# Make all FetchContent targets available
-FetchContent_MakeAvailable(spdlog nlohmann_json prometheus-cpp libsamplerate drogon)
+# Make core FetchContent targets available.
+# nlohmann_json is made available later only if sherpa-onnx didn't create it.
+FetchContent_MakeAvailable(spdlog prometheus-cpp libsamplerate drogon)
 
 # 6. onnxruntime (prebuilt binaries — not a CMake project, download manually)
 option(ASR_ENABLE_CUDA "Enable GPU onnxruntime" OFF)
@@ -155,13 +156,19 @@ set(ENV{SHERPA_ONNXRUNTIME_LIB_DIR} "${ONNXRUNTIME_DIR}/lib")
 
 FetchContent_Declare(sherpa_onnx
     GIT_REPOSITORY https://github.com/k2-fsa/sherpa-onnx.git
-    GIT_TAG        v1.12.24
+    GIT_TAG        v1.12.28
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(sherpa_onnx)
 
-# sherpa-onnx C/C++ API targets unconditionally include nlohmann/json.hpp but
-# fetch the library only when TTS is enabled. Provide include path from our copy.
+# sherpa-onnx >= v1.12.28 fetches nlohmann/json internally.
+# Keep backward compatibility with older sherpa-onnx versions that may not.
+if(NOT TARGET nlohmann_json::nlohmann_json)
+    FetchContent_MakeAvailable(nlohmann_json)
+endif()
+
+# Ensure sherpa-onnx C/C++ API targets see nlohmann/json headers.
+# (Needed across sherpa-onnx versions with different json fetch behavior.)
 if(TARGET nlohmann_json::nlohmann_json)
     get_target_property(_nlohmann_inc nlohmann_json::nlohmann_json INTERFACE_INCLUDE_DIRECTORIES)
     foreach(_sherpa_api_target IN ITEMS sherpa-onnx-c-api sherpa-onnx-cxx-api)
@@ -196,6 +203,9 @@ add_library(asr_core STATIC
     src/handler.cpp
     src/metrics.cpp
     src/server.cpp
+    src/realtime_session.cpp
+    src/offline_transcription.cpp
+    src/whisper_api.cpp
 )
 
 target_include_directories(asr_core PUBLIC

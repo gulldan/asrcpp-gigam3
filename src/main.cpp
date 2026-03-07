@@ -19,6 +19,11 @@ int main() {
     asr::Recognizer recognizer(config);
     spdlog::info("Model loaded. Provider: {}, threads: {}, pool_size: {}", config.provider,
                  config.num_threads, config.recognizer_pool_size);
+    spdlog::info(
+        "Runtime config: sample_rate={} max_audio_sec={} idle_connection_timeout_sec={} "
+        "live_flush_interval_sec={}",
+        config.sample_rate, config.max_audio_sec, config.idle_connection_timeout_sec,
+        config.live_flush_interval_sec);
 
     asr::ASRMetrics::instance().initialize();
 

@@ -14,6 +14,9 @@ add_executable(asr_tests
     test_handler.cpp
     test_metrics.cpp
     test_integration.cpp
+    test_realtime_session.cpp
+    test_offline_transcription.cpp
+    test_whisper_api.cpp
 )
 
 target_link_libraries(asr_tests PRIVATE

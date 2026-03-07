@@ -124,6 +124,7 @@ Dockerfile уже разбит на этапы `deps-builder` и `builder`, по
 | `HOST` | `0.0.0.0` | Адрес привязки |
 | `HTTP_PORT` | `8081` | TCP-порт |
 | `THREADS` | кол-во ядер | Потоки HTTP-сервера (1–256) |
+| `IDLE_CONNECTION_TIMEOUT_SEC` | `0` | Таймаут idle TCP-соединения; `0` = не закрывать |
 
 ### Модели
 
@@ -142,7 +143,7 @@ Dockerfile уже разбит на этапы `deps-builder` и `builder`, по
 | `FEATURE_DIM` | `64` | Размерность фичей |
 | `SILENCE_THRESHOLD` | `0.008` | Порог тишины (RMS) |
 | `MIN_AUDIO_SEC` | `0.5` | Минимальная длительность аудио |
-| `MAX_AUDIO_SEC` | `30.0` | Максимальная длительность аудио |
+| `MAX_AUDIO_SEC` | `0.0` | Лимит длительности WS-сессии; `0` = без лимита |
 | `MAX_UPLOAD_BYTES` | `104857600` | Лимит загрузки файла (100 МБ) |
 | `MAX_WS_MESSAGE_BYTES` | `4194304` | Лимит размера одного WS-сообщения (4 МБ) |
 
@@ -171,7 +172,7 @@ Prometheus-метрики (text format). Префикс: `gigaam_`.
 
 ### `POST /recognize`
 
-Загрузка аудиофайла (multipart/form-data):
+Упрощённый роут распознавания (multipart/form-data):
 
 ```bash
 curl -F "file=@audio.wav" http://localhost:8081/recognize
@@ -180,6 +181,10 @@ curl -F "file=@audio.wav" http://localhost:8081/recognize
 ```json
 {"text": "распознанный текст", "duration": 2.5}
 ```
+
+Поддерживаемые форматы: `flac`, `mp3`, `mp4`, `mpeg`, `mpga`, `m4a`, `ogg`, `wav`, `webm`.
+Для не-WAV форматов используется `ffmpeg` из `PATH`.
+Длинные записи автоматически разбиваются на внутренние чанки (~20 сек), чтобы избежать падений модели на больших входах.
 
 Ошибки возвращаются с соответствующим HTTP-кодом и JSON:
 
@@ -193,6 +198,60 @@ curl -F "file=@audio.wav" http://localhost:8081/recognize
 | 400 | Некорректный файл (не WAV, стерео, пустой) |
 | 413 | Файл превышает лимит `MAX_UPLOAD_BYTES` |
 | 500 | Внутренняя ошибка |
+
+### `POST /v1/audio/transcriptions` (Whisper/OpenAI-compatible)
+
+OpenAI-совместимый роут для `openclaw/zeroclaw` и других клиентов.
+Также доступен алиас: `POST /audio/transcriptions`.
+Длинные записи обрабатываются чанками (внутренне), поэтому один большой файл возвращает обычный единый ответ без стриминга.
+
+Поддерживаемые multipart поля:
+
+| Поле | Обязательно | Описание |
+|------|-------------|----------|
+| `file` | да | Аудиофайл (`flac/mp3/mp4/mpeg/mpga/m4a/ogg/wav/webm`) |
+| `model` | да | Любая строка модели (`whisper-1`, `gpt-4o-mini-transcribe`, `whisper-large-v3-turbo`, ...) |
+| `language` | нет | Языковой хинт (например `ru`, `en`) |
+| `prompt` | нет | Подсказка для стиля |
+| `response_format` | нет | `json` (по умолчанию), `text`, `srt`, `vtt`, `verbose_json` |
+| `temperature` | нет | Диапазон `[0,1]` |
+| `timestamp_granularities[]` | нет | `word`/`segment`, только с `response_format=verbose_json` |
+| `stream` | нет | Принимается как флаг запроса (ответ возвращается обычным HTTP body) |
+
+Пример (openclaw/zeroclaw-совместимый JSON):
+
+```bash
+curl http://localhost:8081/v1/audio/transcriptions \
+  -F "file=@voice.ogg" \
+  -F "model=whisper-1" \
+  -F "response_format=json"
+```
+
+```json
+{"text":"распознанный текст"}
+```
+
+Пример text-формата:
+
+```bash
+curl http://localhost:8081/v1/audio/transcriptions \
+  -F "file=@voice.mp3" \
+  -F "model=whisper-1" \
+  -F "response_format=text"
+```
+
+Ошибки возвращаются в OpenAI-совместимом виде:
+
+```json
+{
+  "error": {
+    "message": "описание ошибки",
+    "type": "invalid_request_error",
+    "param": "file",
+    "code": "invalid_audio"
+  }
+}
+```
 
 ### `WS /ws`
 
@@ -221,13 +280,16 @@ Audio → [Resampling] → [VAD (Silero)] → [ASR (GigaAM/sherpa-onnx)] → Tex
 ## Тесты
 
 ```bash
-# Сборка и запуск
+# Быстрый прогон (debug)
 cmake --preset debug
 cmake --build build/debug -j$(nproc)
 LD_LIBRARY_PATH=build/debug/_deps/onnxruntime/lib build/debug/tests/asr_tests
 
-# Или через ctest
+# Через ctest
 ctest --preset debug
+
+# Полный прогон всех тестовых пресетов (debug/coverage/asan/tsan)
+./scripts/test-presets.sh
 ```
 
 ## Качество кода

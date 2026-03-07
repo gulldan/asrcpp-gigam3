@@ -30,6 +30,7 @@ TEST(Config, DefaultValues) {
   const Config cfg;
   EXPECT_EQ(cfg.host, "0.0.0.0");
   EXPECT_EQ(cfg.port, 8081);
+  EXPECT_EQ(cfg.idle_connection_timeout_sec, static_cast<size_t>(0));
   EXPECT_EQ(cfg.provider, "cpu");
   EXPECT_EQ(cfg.num_threads, 4);
   EXPECT_EQ(cfg.sample_rate, 16000);
@@ -42,7 +43,8 @@ TEST(Config, DefaultValues) {
   EXPECT_EQ(cfg.vad_context_size, 64);
   EXPECT_FLOAT_EQ(cfg.silence_threshold, 0.008f);
   EXPECT_FLOAT_EQ(cfg.min_audio_sec, 0.5f);
-  EXPECT_FLOAT_EQ(cfg.max_audio_sec, 30.0f);
+  EXPECT_FLOAT_EQ(cfg.max_audio_sec, 0.0f);
+  EXPECT_FLOAT_EQ(cfg.live_flush_interval_sec, 6.0f);
   EXPECT_EQ(cfg.model_dir, "models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16");
   EXPECT_EQ(cfg.vad_model, "models/silero_vad.onnx");
 }
@@ -61,6 +63,8 @@ TEST(Config, FromEnvOverrides) {
   const ScopedEnv e11("VAD_MAX_SPEECH", "15.0");
   const ScopedEnv e12("MODEL_DIR", "/custom/model");
   const ScopedEnv e13("VAD_MODEL", "/custom/vad.onnx");
+  const ScopedEnv e14("IDLE_CONNECTION_TIMEOUT_SEC", "120");
+  const ScopedEnv e15("LIVE_FLUSH_INTERVAL_SEC", "3.5");
 
   auto cfg = Config::from_env();
   EXPECT_EQ(cfg.host, "127.0.0.1");
@@ -76,6 +80,8 @@ TEST(Config, FromEnvOverrides) {
   EXPECT_FLOAT_EQ(cfg.vad_max_speech, 15.0f);
   EXPECT_EQ(cfg.model_dir, "/custom/model");
   EXPECT_EQ(cfg.vad_model, "/custom/vad.onnx");
+  EXPECT_EQ(cfg.idle_connection_timeout_sec, static_cast<size_t>(120));
+  EXPECT_FLOAT_EQ(cfg.live_flush_interval_sec, 3.5f);
 }
 
 TEST(Config, MissingEnvUsesDefaults) {
@@ -173,6 +179,28 @@ TEST(ConfigValidation, FixesMaxAudioSec) {
   cfg.min_audio_sec = 0.5f;
   cfg.validate();
   EXPECT_GT(cfg.max_audio_sec, cfg.min_audio_sec);
+}
+
+TEST(ConfigValidation, AllowsUnlimitedMaxAudioSec) {
+  Config cfg;
+  cfg.max_audio_sec = 0.0f;
+  cfg.min_audio_sec = 0.5f;
+  cfg.validate();
+  EXPECT_FLOAT_EQ(cfg.max_audio_sec, 0.0f);
+}
+
+TEST(ConfigValidation, ClampsNegativeLiveFlushInterval) {
+  Config cfg;
+  cfg.live_flush_interval_sec = -1.0f;
+  cfg.validate();
+  EXPECT_FLOAT_EQ(cfg.live_flush_interval_sec, 0.0f);
+}
+
+TEST(ConfigValidation, ClampsTinyLiveFlushInterval) {
+  Config cfg;
+  cfg.live_flush_interval_sec = 0.01f;
+  cfg.validate();
+  EXPECT_FLOAT_EQ(cfg.live_flush_interval_sec, 0.2f);
 }
 
 TEST(ConfigValidation, ClampsThreads) {

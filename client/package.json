@@ -1,0 +1,14 @@
+{
+  "name": "asr-client",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/main.ts",
+    "build": "bun build src/main.ts --compile --minify --sourcemap --bytecode --outfile asr-client",
+    "build:web": "bun run src/web/build.ts",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

@@ -13,3 +13,4 @@ wheels/
 .pytest_cache
 cmake_test_discovery*
 dhat.out.txt
+node_modules

@@ -26,7 +26,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 
 # ============================================
-# Stage 2: Dependency warm-up
+# Stage 2: Web frontend build
+# ============================================
+FROM oven/bun:1.3.10 AS web-builder
+
+WORKDIR /build
+
+COPY client/src/web/ client/src/web/
+
+RUN bun run client/src/web/build.ts
+
+# ============================================
+# Stage 3: Dependency warm-up
 # Builds with stub sources so third-party deps are cached independently
 # from frequent src/include changes.
 # ============================================
@@ -36,7 +47,7 @@ COPY CMakeLists.txt CMakePresets.json ./
 
 RUN set -eux; \
     mkdir -p src; \
-    for f in config audio vad recognizer handler metrics server; do \
+    for f in config audio vad recognizer handler metrics server realtime_session offline_transcription whisper_api; do \
       printf 'int asr_stub_%s(void) { return 0; }\n' "${f}" > "src/${f}.cpp"; \
     done; \
     printf 'int main(void) { return 0; }\n' > src/main.cpp
@@ -45,7 +56,7 @@ RUN cmake --preset release && \
     cmake --build build/release --parallel $(nproc)
 
 # ============================================
-# Stage 3: Final app build
+# Stage 4: Final app build
 # ============================================
 FROM build-base AS builder
 
@@ -59,14 +70,24 @@ COPY CMakeLists.txt CMakePresets.json ./
 COPY include/ include/
 COPY src/ src/
 COPY third_party/ third_party/
-COPY static/ static/
+COPY --from=web-builder /build/static/ static/
+
+# Remove project artifacts built from stub sources while keeping third-party cache
+RUN rm -rf \
+    /build/build/release/CMakeFiles/asr_core.dir \
+    /build/build/release/CMakeFiles/asr-server.dir \
+    /build/build/release/libasr_core.a \
+    /build/build/release/asr-server
 
 # Re-configure with real sources and build app target
 RUN cmake --preset release && \
     cmake --build build/release --parallel $(nproc) --target asr-server
 
+# Runtime-writable upload path for non-root user
+RUN mkdir -p /build/runtime/uploads/tmp
+
 # ============================================
-# Stage 4: Runtime
+# Stage 5: Runtime
 # ============================================
 FROM gcr.io/distroless/cc-debian13 AS runtime
 
@@ -83,8 +104,9 @@ COPY --from=builder /lib/x86_64-linux-gnu /lib/x86_64-linux-gnu
 COPY --from=builder /usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
 
 # Copy static files and models
-COPY static/ /app/static/
+COPY --from=web-builder /build/static/ /app/static/
 COPY models/ /app/models/
+COPY --from=builder --chown=65532:65532 /build/runtime/uploads/ /app/uploads/
 
 ENV PROVIDER=cpu
 ENV NUM_THREADS=4

@@ -144,5 +144,49 @@ TEST(Handler, MultipleSessionsOnConnection) {
   EXPECT_EQ(msgs2.back().type, ASRSession::OutMessage::Done);
 }
 
+TEST(Handler, AutoRolloverAfterMaxDurationWithoutReset) {
+  if (!models_exist())
+    GTEST_SKIP() << "Models not found";
+
+  auto cfg          = make_test_config();
+  cfg.max_audio_sec = 0.05f;  // force auto-finalize for a single 1024-sample chunk at 16k
+
+  auto       vad_cfg = make_vad_config(cfg);
+  Recognizer rec(cfg);
+  ASRSession session(rec, vad_cfg, cfg);
+
+  std::vector<float> chunk(1024, 0.0f);
+
+  auto first_msgs = session.on_audio(chunk);
+  ASSERT_FALSE(first_msgs.empty());
+  EXPECT_EQ(first_msgs.back().type, ASRSession::OutMessage::Done);
+
+  // No explicit RESET between chunks: session should auto-start again.
+  auto second_msgs = session.on_audio(chunk);
+  EXPECT_FALSE(second_msgs.empty());
+}
+
+TEST(Handler, LivePeriodicFlushDoesNotEmitDone) {
+  if (!models_exist())
+    GTEST_SKIP() << "Models not found";
+
+  auto cfg                    = make_test_config();
+  cfg.max_audio_sec           = 0.0f;
+  cfg.live_flush_interval_sec = 0.2f;
+
+  auto       vad_cfg = make_vad_config(cfg);
+  Recognizer rec(cfg);
+  ASRSession session(rec, vad_cfg, cfg);
+
+  // 4096 samples at 16k = 0.256s, enough to trigger periodic live flush.
+  std::vector<float> silence(4096, 0.0f);
+  auto               msgs = session.on_audio(silence);
+  ASSERT_FALSE(msgs.empty());
+
+  for (const auto& msg : msgs) {
+    EXPECT_NE(msg.type, ASRSession::OutMessage::Done);
+  }
+}
+
 }  // namespace
 }  // namespace asr

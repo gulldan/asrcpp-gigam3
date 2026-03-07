@@ -1,12 +1,12 @@
 #include "asr/handler.h"
 
-#include <spdlog/fmt/fmt.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 
 #include "asr/audio.h"
 #include "asr/config.h"
@@ -112,18 +112,20 @@ void ASRSession::write_done() {
 // --- Session lifecycle ---
 
 void ASRSession::reset_session() {
-  start_ts_               = SteadyClock::now();
-  first_result_ts_        = {};
-  has_first_result_       = false;
-  segments_               = 0;
-  silence_segments_       = 0;
-  decode_sec_             = 0.0;
-  preprocess_sec_         = 0.0;
-  audio_samples_          = 0;
-  chunks_                 = 0;
-  bytes_                  = 0;
-  total_samples_received_ = 0;
-  max_duration_exceeded_  = false;
+  ++session_seq_;
+  start_ts_                = SteadyClock::now();
+  first_result_ts_         = {};
+  has_first_result_        = false;
+  segments_                = 0;
+  silence_segments_        = 0;
+  decode_sec_              = 0.0;
+  preprocess_sec_          = 0.0;
+  audio_samples_           = 0;
+  last_live_flush_samples_ = 0;
+  chunks_                  = 0;
+  bytes_                   = 0;
+  total_samples_received_  = 0;
+  max_duration_exceeded_   = false;
 }
 
 void ASRSession::process_vad_segments() {
@@ -160,11 +162,14 @@ void ASRSession::process_vad_segments() {
     ASRMetrics::instance().observe_segment(static_cast<double>(audio_sec), seg_decode_sec);
 
     if (text.empty()) {
+      spdlog::debug("ASR session #{}: empty decode result for segment {:.3f}s", session_seq_, audio_sec);
       silence_segments_++;
       ASRMetrics::instance().record_silence();
     } else {
       segments_++;
       ASRMetrics::instance().record_result(text);
+      spdlog::info("ASR session #{}: final segment {:.3f}s text_len={}", session_seq_, audio_sec,
+                   text.size());
       write_final(text, audio_sec);
     }
 
@@ -172,20 +177,89 @@ void ASRSession::process_vad_segments() {
   }
 }
 
+bool ASRSession::has_final_messages() const {
+  for (size_t i = 0; i < out_size_; ++i) {
+    if (out_messages_[i].type == OutMessage::Final) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void ASRSession::process_live_chunk_fallback() {
+  const auto min_samples = static_cast<size_t>(
+      std::max(0.0F, config_.min_audio_sec) * static_cast<float>(config_.sample_rate));
+
+  if (live_chunk_.size() < min_samples || live_chunk_.empty()) {
+    return;
+  }
+
+  const float fallback_rms = compute_rms(live_chunk_);
+  if (fallback_rms < config_.silence_threshold) {
+    spdlog::info(
+        "ASR session #{}: live fallback skipped (duration={:.2f}s rms={:.5f} < silence_threshold={:.5f})",
+        session_seq_, static_cast<double>(live_chunk_.size()) / static_cast<double>(config_.sample_rate),
+        fallback_rms, config_.silence_threshold);
+    live_chunk_.clear();
+    return;
+  }
+
+  const float audio_sec = static_cast<float>(live_chunk_.size()) / static_cast<float>(config_.sample_rate);
+  auto        t0        = SteadyClock::now();
+  auto        text      = recognizer_.recognize(live_chunk_, config_.sample_rate);
+  auto        t1        = SteadyClock::now();
+  const auto  decode_sec = std::chrono::duration<double>(t1 - t0).count();
+
+  decode_sec_ += decode_sec;
+  audio_samples_ += live_chunk_.size();
+
+  if (!has_first_result_) {
+    first_result_ts_  = SteadyClock::now();
+    has_first_result_ = true;
+    const double ttfr = std::chrono::duration<double>(first_result_ts_ - start_ts_).count();
+    ASRMetrics::instance().observe_ttfr(ttfr, "websocket");
+  }
+
+  ASRMetrics::instance().observe_segment(static_cast<double>(audio_sec), decode_sec);
+
+  if (text.empty()) {
+    ++silence_segments_;
+    ASRMetrics::instance().record_silence();
+    spdlog::info("ASR session #{}: live fallback produced empty result (duration={:.2f}s rms={:.5f})",
+                 session_seq_, audio_sec, fallback_rms);
+  } else {
+    ++segments_;
+    ASRMetrics::instance().record_result(text);
+    spdlog::info("ASR session #{}: live fallback final {:.3f}s text_len={} rms={:.5f}", session_seq_,
+                 audio_sec, text.size(), fallback_rms);
+    write_final(text, audio_sec);
+  }
+
+  live_chunk_.clear();
+}
+
 void ASRSession::flush_pending() {
   if (!pending_.empty()) {
+    const size_t tail_samples = pending_.size();
     pending_.resize(static_cast<size_t>(config_.vad_window_size), 0.0f);
     vad_.accept_waveform(pending_);
     pending_.clear();
+    spdlog::debug("ASR session #{}: flushed pending tail {} samples (padded to {})", session_seq_,
+                  tail_samples, config_.vad_window_size);
   }
   vad_.flush();
 }
 
-void ASRSession::finalize_session() {
+void ASRSession::finalize_session(const char* reason) {
   // Record request-level metrics
   const auto   now       = SteadyClock::now();
   const double total_sec = std::chrono::duration<double>(now - start_ts_).count();
   const double audio_sec = static_cast<double>(audio_samples_) / static_cast<double>(config_.sample_rate);
+
+  spdlog::info(
+      "ASR session #{} finalize reason={} total_sec={:.3f} audio_sec={:.3f} chunks={} bytes={} finals={} "
+      "silence_segments={}",
+      session_seq_, reason, total_sec, audio_sec, chunks_, bytes_, segments_, silence_segments_);
 
   ASRMetrics::instance().observe_request(total_sec, audio_sec, decode_sec_, chunks_, bytes_, preprocess_sec_,
                                          0.0, "websocket", "success");
@@ -209,6 +283,7 @@ void ASRSession::finalize_session() {
   // Reset for next session
   vad_.reset();
   pending_.clear();
+  live_chunk_.clear();
   reset_session();
 }
 
@@ -217,9 +292,10 @@ void ASRSession::finalize_session() {
 span<const ASRSession::OutMessage> ASRSession::on_audio(span<const float> samples) {
   begin_messages();
 
-  if (max_duration_exceeded_) {
-    return current_messages();
-  }
+  // Previous call may have force-finalized due max_audio_sec and sent {"type":"done"}.
+  // Start a fresh session automatically on the next audio chunk so live mode
+  // doesn't depend on an explicit RESET from the client.
+  max_duration_exceeded_ = false;
 
   auto preprocess_start = SteadyClock::now();
 
@@ -227,11 +303,13 @@ span<const ASRSession::OutMessage> ASRSession::on_audio(span<const float> sample
   if (!session_active_) {
     session_active_ = true;
     ASRMetrics::instance().session_started();
+    spdlog::info("ASR session #{}: started", session_seq_);
   }
 
   chunks_++;
   total_samples_received_ += samples.size();
   bytes_ += samples.size() * sizeof(float);
+  live_chunk_.insert(live_chunk_.end(), samples.begin(), samples.end());
 
   // Compute RMS for the chunk
   const float rms = compute_rms(samples);
@@ -258,6 +336,37 @@ span<const ASRSession::OutMessage> ASRSession::on_audio(span<const float> sample
 
   // Process any finalized VAD segments
   process_vad_segments();
+  if (has_final_messages()) {
+    live_chunk_.clear();
+  }
+
+  // In long continuous speech VAD may delay finalization until silence.
+  // Periodically flush live stream state to emit regular finals without
+  // requiring client-side RECOGNIZE.
+  if (config_.live_flush_interval_sec > 0.0f) {
+    const auto interval_samples =
+        static_cast<size_t>(config_.live_flush_interval_sec * static_cast<float>(config_.sample_rate));
+    if (interval_samples > 0 && (total_samples_received_ - last_live_flush_samples_) >= interval_samples) {
+      const double total_input_sec =
+          static_cast<double>(total_samples_received_) / static_cast<double>(config_.sample_rate);
+      const double since_last_flush_sec =
+          static_cast<double>(total_samples_received_ - last_live_flush_samples_) /
+          static_cast<double>(config_.sample_rate);
+      spdlog::info(
+          "ASR session #{}: periodic live flush total_input_sec={:.2f} since_last_flush_sec={:.2f} "
+          "pending_samples={} in_speech={}",
+          session_seq_, total_input_sec, since_last_flush_sec, pending_.size(),
+          vad_.is_speech() ? "true" : "false");
+      flush_pending();
+      process_vad_segments();
+      if (!has_final_messages()) {
+        process_live_chunk_fallback();
+      } else {
+        live_chunk_.clear();
+      }
+      last_live_flush_samples_ = total_samples_received_;
+    }
+  }
 
   // If no segments were finalized, send interim status
   if (out_size_ == 0) {
@@ -266,15 +375,19 @@ span<const ASRSession::OutMessage> ASRSession::on_audio(span<const float> sample
     write_interim(duration, rms, vad_.is_speech());
   }
 
-  // Auto-finalize if max audio duration exceeded (DoS protection)
-  float received_sec = static_cast<float>(total_samples_received_) / static_cast<float>(config_.sample_rate);
-  if (received_sec > config_.max_audio_sec) {
-    spdlog::warn("WS: max audio duration exceeded ({:.1f}s > {:.1f}s), forcing recognize", received_sec,
-                 config_.max_audio_sec);
-    flush_pending();
-    process_vad_segments();
-    finalize_session();
-    max_duration_exceeded_ = true;
+  // Auto-finalize if max audio duration exceeded (DoS protection).
+  // Limit is disabled when max_audio_sec == 0.
+  if (config_.max_audio_sec > 0.0f) {
+    float received_sec =
+        static_cast<float>(total_samples_received_) / static_cast<float>(config_.sample_rate);
+    if (received_sec > config_.max_audio_sec) {
+      spdlog::warn("WS: max audio duration exceeded ({:.1f}s > {:.1f}s), forcing recognize", received_sec,
+                   config_.max_audio_sec);
+      flush_pending();
+      process_vad_segments();
+      finalize_session("max_audio_sec");
+      max_duration_exceeded_ = true;
+    }
   }
 
   return current_messages();
@@ -282,21 +395,32 @@ span<const ASRSession::OutMessage> ASRSession::on_audio(span<const float> sample
 
 span<const ASRSession::OutMessage> ASRSession::on_recognize() {
   begin_messages();
+  spdlog::info("ASR session #{}: RECOGNIZE received (session_active={} max_duration_exceeded={})",
+               session_seq_, session_active_ ? "true" : "false", max_duration_exceeded_ ? "true" : "false");
 
   // If auto-finalize already fired (max_audio_sec), don't finalize again —
   // done message and metrics were already recorded.
   if (max_duration_exceeded_) {
+    spdlog::info("ASR session #{}: skipping duplicate finalize after max_audio_sec auto-finalize",
+                 session_seq_);
     max_duration_exceeded_ = false;
     return current_messages();
   }
 
   flush_pending();
   process_vad_segments();
-  finalize_session();
+  if (!has_final_messages()) {
+    process_live_chunk_fallback();
+  } else {
+    live_chunk_.clear();
+  }
+  finalize_session("recognize_command");
   return current_messages();
 }
 
 void ASRSession::on_reset() {
+  spdlog::info("ASR session #{}: RESET received (chunks={} bytes={} samples={})", session_seq_, chunks_,
+               bytes_, total_samples_received_);
   max_duration_exceeded_ = false;
   if (session_active_) {
     ASRMetrics::instance().session_ended(0.0);
@@ -304,15 +428,26 @@ void ASRSession::on_reset() {
   }
   vad_.reset();
   pending_.clear();
+  live_chunk_.clear();
   reset_session();
+}
+
+bool ASRSession::is_speech() const {
+  return vad_.is_speech();
 }
 
 void ASRSession::on_close() {
   if (session_active_) {
     const auto   now     = SteadyClock::now();
     const double elapsed = std::chrono::duration<double>(now - start_ts_).count();
+    spdlog::info(
+        "ASR session #{}: close active session elapsed={:.3f}s chunks={} bytes={} finals={} "
+        "silence_segments={}",
+        session_seq_, elapsed, chunks_, bytes_, segments_, silence_segments_);
     ASRMetrics::instance().session_ended(elapsed);
     session_active_ = false;
+  } else {
+    spdlog::debug("ASR session #{}: close on inactive session", session_seq_);
   }
 }
 
