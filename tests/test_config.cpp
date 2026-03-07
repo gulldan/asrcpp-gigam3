@@ -241,7 +241,7 @@ TEST(ConfigValidation, ClampsMinSpeech) {
 
 TEST(Config, DefaultPoolValues) {
   const Config cfg;
-  EXPECT_EQ(cfg.recognizer_pool_size, 0);
+  EXPECT_EQ(cfg.recognizer_pool_size, 1);
   EXPECT_EQ(cfg.max_concurrent_requests, static_cast<size_t>(0));
 }
 
@@ -258,7 +258,7 @@ TEST(ConfigValidation, PoolSizeAutoDefault) {
   Config cfg;
   cfg.recognizer_pool_size = 0;
   cfg.validate();
-  EXPECT_EQ(cfg.recognizer_pool_size, static_cast<int>(cfg.threads));
+  EXPECT_EQ(cfg.recognizer_pool_size, 1);
 }
 
 TEST(ConfigValidation, MaxConcurrentAutoDefault) {

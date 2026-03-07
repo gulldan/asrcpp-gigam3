@@ -187,8 +187,8 @@ bool ASRSession::has_final_messages() const {
 }
 
 void ASRSession::process_live_chunk_fallback() {
-  const auto min_samples = static_cast<size_t>(
-      std::max(0.0F, config_.min_audio_sec) * static_cast<float>(config_.sample_rate));
+  const auto min_samples =
+      static_cast<size_t>(std::max(0.0F, config_.min_audio_sec) * static_cast<float>(config_.sample_rate));
 
   if (live_chunk_.size() < min_samples || live_chunk_.empty()) {
     return;
@@ -204,10 +204,10 @@ void ASRSession::process_live_chunk_fallback() {
     return;
   }
 
-  const float audio_sec = static_cast<float>(live_chunk_.size()) / static_cast<float>(config_.sample_rate);
-  auto        t0        = SteadyClock::now();
-  auto        text      = recognizer_.recognize(live_chunk_, config_.sample_rate);
-  auto        t1        = SteadyClock::now();
+  const float audio_sec  = static_cast<float>(live_chunk_.size()) / static_cast<float>(config_.sample_rate);
+  auto        t0         = SteadyClock::now();
+  auto        text       = recognizer_.recognize(live_chunk_, config_.sample_rate);
+  auto        t1         = SteadyClock::now();
   const auto  decode_sec = std::chrono::duration<double>(t1 - t0).count();
 
   decode_sec_ += decode_sec;

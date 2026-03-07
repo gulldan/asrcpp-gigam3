@@ -23,7 +23,12 @@ std::string to_lower_ascii(std::string_view value) {
 }
 
 bool is_supported_input_audio_format(const std::string& format) {
-  return format == "pcm16" || format == "g711_ulaw" || format == "g711_alaw";
+  return format == "pcm16" || format == "opus" || format == "g711_ulaw" || format == "g711_alaw";
+}
+
+bool is_supported_opus_output_sample_rate(int sample_rate) {
+  return sample_rate == 8000 || sample_rate == 12000 || sample_rate == 16000 || sample_rate == 24000 ||
+         sample_rate == 48000;
 }
 
 }  // namespace
@@ -84,7 +89,9 @@ bool RealtimeSession::apply_session_update(const nlohmann::json& update, std::st
     return false;
   }
 
-  auto next = config_;
+  auto       next              = config_;
+  const bool has_format_update = update.contains("input_audio_format");
+  const bool has_rate_update   = update.contains("input_sample_rate");
 
   if (update.contains("input_audio_format")) {
     if (!update["input_audio_format"].is_string()) {
@@ -110,6 +117,18 @@ bool RealtimeSession::apply_session_update(const nlohmann::json& update, std::st
       return false;
     }
     next.input_sample_rate = rate;
+  }
+
+  if (next.input_audio_format == "opus") {
+    if (has_format_update && !has_rate_update && config_.input_audio_format != "opus") {
+      // RFC 7587 uses 48k RTP timestamp clock. Keep this as default for Opus sessions.
+      next.input_sample_rate = 48000;
+    }
+    if (!is_supported_opus_output_sample_rate(next.input_sample_rate)) {
+      set_error(error_message,
+                "session.input_sample_rate for opus must be one of: 8000, 12000, 16000, 24000, 48000");
+      return false;
+    }
   }
 
   if (update.contains("model")) {
@@ -316,8 +335,7 @@ std::string RealtimeSession::event_buffer_cleared() {
   return event.dump();
 }
 
-std::string RealtimeSession::event_transcription_delta(const std::string& item_id,
-                                                       const std::string& delta) {
+std::string RealtimeSession::event_transcription_delta(const std::string& item_id, const std::string& delta) {
   nlohmann::json event;
   event["type"]          = "conversation.item.input_audio_transcription.delta";
   event["event_id"]      = next_event_id();
@@ -339,15 +357,13 @@ std::string RealtimeSession::event_transcription_completed(const std::string& it
 }
 
 std::string RealtimeSession::event_error(const std::string& code, const std::string& message,
-                                         const std::string& param,
-                                         const std::string& client_event_id) {
+                                         const std::string& param, const std::string& client_event_id) {
   nlohmann::json err;
-  err["type"]    = "invalid_request_error";
-  err["code"]    = code;
-  err["message"] = message;
-  err["param"]   = param.empty() ? nlohmann::json(nullptr) : nlohmann::json(param);
-  err["event_id"] =
-      client_event_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(client_event_id);
+  err["type"]     = "invalid_request_error";
+  err["code"]     = code;
+  err["message"]  = message;
+  err["param"]    = param.empty() ? nlohmann::json(nullptr) : nlohmann::json(param);
+  err["event_id"] = client_event_id.empty() ? nlohmann::json(nullptr) : nlohmann::json(client_event_id);
 
   nlohmann::json event;
   event["type"]     = "error";

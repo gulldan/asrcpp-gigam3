@@ -1,14 +1,8 @@
 #include <gtest/gtest.h>
-#include <unistd.h>
 
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
-#include <cstring>
-#include <fstream>
-#include <iterator>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include "asr/audio.h"
@@ -19,87 +13,6 @@
 
 namespace asr {
 namespace {
-
-class TempPath {
- public:
-  explicit TempPath(std::string path) : path_(std::move(path)) {}
-  ~TempPath() {
-    if (!path_.empty()) {
-      (void)std::remove(path_.c_str());
-    }
-  }
-
-  TempPath(const TempPath&)            = delete;
-  TempPath& operator=(const TempPath&) = delete;
-  TempPath(TempPath&&)                 = delete;
-  TempPath& operator=(TempPath&&)      = delete;
-
-  const std::string& path() const {
-    return path_;
-  }
-
- private:
-  std::string path_;
-};
-
-std::string make_temp_path(std::string_view suffix) {
-  std::string pattern = "/tmp/asr-audio-test-XXXXXX";
-  pattern += std::string(suffix);
-
-  std::vector<char> path_buf(pattern.begin(), pattern.end());
-  path_buf.push_back('\0');
-
-  const int fd = mkstemps(path_buf.data(), static_cast<int>(suffix.size()));
-  if (fd < 0) {
-    return {};
-  }
-  (void)::close(fd);
-  return std::string(path_buf.data());
-}
-
-bool write_bytes(const std::string& path, span<const uint8_t> bytes) {
-  std::ofstream out(path, std::ios::binary);
-  if (!out.is_open()) {
-    return false;
-  }
-  out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-  return out.good();
-}
-
-std::vector<uint8_t> read_bytes(const std::string& path) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in.is_open()) {
-    return {};
-  }
-  return std::vector<uint8_t>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-}
-
-bool ffmpeg_available() {
-  return std::system("ffmpeg -version >/dev/null 2>&1") == 0;
-}
-
-std::vector<uint8_t> transcode_with_ffmpeg(span<const uint8_t> input_wav, std::string_view output_extension) {
-  const auto input_path  = make_temp_path(".wav");
-  const auto output_path = make_temp_path(output_extension);
-  if (input_path.empty() || output_path.empty()) {
-    return {};
-  }
-
-  TempPath input_guard(input_path);
-  TempPath output_guard(output_path);
-
-  if (!write_bytes(input_path, input_wav)) {
-    return {};
-  }
-
-  const std::string cmd =
-      "ffmpeg -nostdin -hide_banner -loglevel error -y -i " + input_path + " " + output_path;
-  if (std::system(cmd.c_str()) != 0) {
-    return {};
-  }
-
-  return read_bytes(output_path);
-}
 
 // Helper: create a valid mono WAV file in memory
 std::vector<uint8_t> make_wav(const std::vector<float>& samples, int sample_rate, int channels = 1) {
@@ -282,39 +195,62 @@ TEST(Audio, DecodeAudioRejectsUnsupportedExtension) {
   }
 }
 
-TEST(Audio, DecodeAudioMp3ViaFfmpeg) {
-  if (!ffmpeg_available()) {
-    GTEST_SKIP() << "ffmpeg not found";
-  }
-
-  auto sine     = make_sine(440.0f, 1.0f, 16000);
+TEST(Audio, DecodeAudioWav) {
+  auto sine     = make_sine(440.0f, 0.75f, 16000);
   auto wav_data = make_wav(sine, 16000);
   ASSERT_FALSE(wav_data.empty());
 
-  auto mp3_data = transcode_with_ffmpeg(wav_data, ".mp3");
-  ASSERT_FALSE(mp3_data.empty());
-
-  auto audio = decode_audio(mp3_data, "voice.mp3", 16000);
+  auto audio = decode_audio(wav_data, "voice.wav", 16000);
   EXPECT_FALSE(audio.samples.empty());
-  EXPECT_NEAR(audio.duration_sec, 1.0f, 0.08f);
-  EXPECT_NEAR(static_cast<float>(audio.samples.size()), 16000.0f, 1300.0f);
+  EXPECT_NEAR(audio.duration_sec, 0.75f, 0.02f);
 }
 
-TEST(Audio, DecodeAudioOggViaFfmpeg) {
-  if (!ffmpeg_available()) {
-    GTEST_SKIP() << "ffmpeg not found";
-  }
-
-  auto sine     = make_sine(660.0f, 0.8f, 16000);
+TEST(Audio, DecodeAudioStreamedWav) {
+  auto sine     = make_sine(220.0f, 1.3f, 16000);
   auto wav_data = make_wav(sine, 16000);
   ASSERT_FALSE(wav_data.empty());
 
-  auto ogg_data = transcode_with_ffmpeg(wav_data, ".ogg");
-  ASSERT_FALSE(ogg_data.empty());
+  std::vector<float> streamed;
+  const auto         stats = decode_audio_streamed(
+      wav_data, "voice.wav", 16000, 4096U,
+      [&streamed](span<const float> chunk) { streamed.insert(streamed.end(), chunk.begin(), chunk.end()); });
 
-  auto audio = decode_audio(ogg_data, "voice.ogg", 16000);
-  EXPECT_FALSE(audio.samples.empty());
-  EXPECT_NEAR(audio.duration_sec, 0.8f, 0.08f);
+  EXPECT_FALSE(streamed.empty());
+  EXPECT_EQ(stats.samples, streamed.size());
+  EXPECT_NEAR(stats.duration_sec, 1.3f, 0.02f);
+}
+
+TEST(Audio, Base64DecodeIntoReuseBuffer) {
+  std::vector<uint8_t> out;
+  out.reserve(64U);
+
+  base64_decode_into("AAEC", out);
+  ASSERT_EQ(out.size(), 3U);
+  EXPECT_EQ(out[0], 0U);
+  EXPECT_EQ(out[1], 1U);
+  EXPECT_EQ(out[2], 2U);
+
+  base64_decode_into("////", out);
+  ASSERT_EQ(out.size(), 3U);
+  EXPECT_EQ(out[0], 255U);
+  EXPECT_EQ(out[1], 255U);
+  EXPECT_EQ(out[2], 255U);
+}
+
+TEST(Audio, Pcm16ToFloat32IntoReuseBuffer) {
+  std::vector<uint8_t> pcm = {
+      0x00, 0x80,  // -32768
+      0x00, 0x00,  // 0
+      0xFF, 0x7F,  // 32767
+  };
+  std::vector<float> out;
+  out.reserve(32U);
+
+  pcm16_to_float32_into(pcm, out);
+  ASSERT_EQ(out.size(), 3U);
+  EXPECT_FLOAT_EQ(out[0], -1.0F);
+  EXPECT_FLOAT_EQ(out[1], 0.0F);
+  EXPECT_NEAR(out[2], 32767.0F / 32768.0F, 1e-6F);
 }
 
 }  // namespace

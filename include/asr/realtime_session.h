@@ -1,10 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
-
-#include <nlohmann/json.hpp>
 
 #include "asr/config.h"
 #include "asr/vad.h"
@@ -12,7 +11,7 @@
 namespace asr {
 
 struct RealtimeSessionConfig {
-  std::string input_audio_format = "pcm16";  // pcm16 | g711_ulaw | g711_alaw
+  std::string input_audio_format = "pcm16";  // pcm16 | opus | g711_ulaw | g711_alaw
   int         input_sample_rate  = 16000;
 
   struct InputAudioTranscription {
@@ -42,13 +41,11 @@ VadConfig make_realtime_vad_config(const Config& base_config, const RealtimeSess
 
 class RealtimeSession {
  public:
-  explicit RealtimeSession(uint64_t connection_id,
-                           RealtimeSessionConfig config = RealtimeSessionConfig{});
+  explicit RealtimeSession(uint64_t connection_id, RealtimeSessionConfig config = RealtimeSessionConfig{});
 
   [[nodiscard]] const RealtimeSessionConfig& config() const;
   void                                       set_config(const RealtimeSessionConfig& config);
-  bool                                       apply_session_update(const nlohmann::json& update,
-                                                                  std::string*         error_message);
+  bool apply_session_update(const nlohmann::json& update, std::string* error_message);
 
   [[nodiscard]] std::string ensure_current_item_id();
   RealtimeCommittedItem     commit_current_item();
@@ -60,8 +57,7 @@ class RealtimeSession {
   [[nodiscard]] std::string event_speech_stopped(int64_t audio_end_ms);
   [[nodiscard]] std::string event_buffer_committed(const RealtimeCommittedItem& commit);
   [[nodiscard]] std::string event_buffer_cleared();
-  [[nodiscard]] std::string event_transcription_delta(const std::string& item_id,
-                                                      const std::string& delta);
+  [[nodiscard]] std::string event_transcription_delta(const std::string& item_id, const std::string& delta);
   [[nodiscard]] std::string event_transcription_completed(const std::string& item_id,
                                                           const std::string& transcript);
   [[nodiscard]] std::string event_error(const std::string& code, const std::string& message,

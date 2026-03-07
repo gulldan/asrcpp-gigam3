@@ -19,6 +19,10 @@ endif()
 # FetchContent for all dependencies
 # ---------------------------------------------------------------------------
 include(FetchContent)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(OPUS REQUIRED IMPORTED_TARGET opus)
+pkg_check_modules(OPUSFILE IMPORTED_TARGET opusfile)
+
 set(FETCHCONTENT_QUIET OFF)
 set(FETCHCONTENT_BASE_DIR "${CMAKE_SOURCE_DIR}/build/_shared_deps/fetchcontent" CACHE PATH
     "Shared FetchContent cache directory across CMake presets")
@@ -223,7 +227,11 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(asr_core STATIC
     src/config.cpp
-    src/audio.cpp
+    src/audio/base64.cpp
+    src/audio/pcm.cpp
+    src/audio/resampler.cpp
+    src/audio/realtime_opus.cpp
+    src/audio/decode.cpp
     src/vad.cpp
     src/recognizer.cpp
     src/handler.cpp
@@ -250,8 +258,14 @@ target_link_libraries(asr_core PUBLIC
     nlohmann_json::nlohmann_json
     spdlog::spdlog
     samplerate
+    PkgConfig::OPUS
     sherpa-onnx-c-api
 )
+
+if(OPUSFILE_FOUND)
+    target_link_libraries(asr_core PUBLIC PkgConfig::OPUSFILE)
+    target_compile_definitions(asr_core PUBLIC ASR_HAS_OPUSFILE=1)
+endif()
 
 # ---------------------------------------------------------------------------
 # Main executable

@@ -30,7 +30,6 @@
 #include "asr/config.h"
 #include "asr/handler.h"
 #include "asr/metrics.h"
-#include "asr/offline_transcription.h"
 #include "asr/realtime_session.h"
 #include "asr/recognizer.h"
 #include "asr/span.h"
@@ -52,6 +51,31 @@ WsSharedState         g_ws_state;        // NOLINT(cppcoreguidelines-avoid-non-c
 std::atomic<uint64_t> g_ws_conn_seq{0};  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 constexpr float kHttpRecognitionChunkSec = 20.0f;
+
+std::string trim_ascii(std::string_view input) {
+  constexpr std::string_view kWs   = " \t\n\r\f\v";
+  const auto                 begin = input.find_first_not_of(kWs);
+  if (begin == std::string_view::npos) {
+    return {};
+  }
+  const auto end = input.find_last_not_of(kWs);
+  return std::string(input.substr(begin, end - begin + 1));
+}
+
+void append_transcription_chunk(std::string& text, std::string_view chunk_text) {
+  auto trimmed = trim_ascii(chunk_text);
+  if (trimmed.empty()) {
+    return;
+  }
+  if (!text.empty()) {
+    text.push_back(' ');
+  }
+  text += trimmed;
+}
+
+size_t http_chunk_samples(int sample_rate) {
+  return std::max<size_t>(1, static_cast<size_t>(kHttpRecognitionChunkSec * static_cast<float>(sample_rate)));
+}
 }  // namespace
 
 struct WsConnectionContext {
@@ -83,14 +107,17 @@ struct RealtimeConnectionContext {
   RealtimeSession                       realtime{0};
   std::shared_ptr<ASRSession>           session;
   std::unique_ptr<StreamResampler>      resampler;
+  std::unique_ptr<RealtimeOpusDecoder>  opus_decoder;
   std::chrono::steady_clock::time_point connected_at;
   std::chrono::steady_clock::time_point last_event_at;
   std::string                           close_reason = "peer_closed_or_normal";
   std::string                           last_client_event_type;
   std::string                           last_error;
+  std::vector<uint8_t>                  decoded_audio_bytes;
+  std::vector<float>                    decoded_audio_samples;
   uint64_t                              connection_id{0};
   uint64_t                              raw_input_samples{0};  // decoded client-format samples
-  uint64_t                              input_samples{0};  // samples seen by ASR after resampling
+  uint64_t                              input_samples{0};      // samples seen by ASR after resampling
   uint64_t                              append_events{0};
   uint64_t                              ping_events{0};
   uint64_t                              invalid_events{0};
@@ -388,14 +415,15 @@ class RealtimeWsController : public drogon::WebSocketController<RealtimeWsContro
       return;
     }
 
-    auto ctx = std::make_shared<RealtimeConnectionContext>();
-    ctx->connected_at  = std::chrono::steady_clock::now();
-    ctx->last_event_at = ctx->connected_at;
-    ctx->connection_id = g_ws_conn_seq.fetch_add(1, std::memory_order_relaxed) + 1;
-    ctx->runtime_config = std::make_shared<Config>(*g_ws_state.config);
+    auto ctx                                     = std::make_shared<RealtimeConnectionContext>();
+    ctx->connected_at                            = std::chrono::steady_clock::now();
+    ctx->last_event_at                           = ctx->connected_at;
+    ctx->connection_id                           = g_ws_conn_seq.fetch_add(1, std::memory_order_relaxed) + 1;
+    ctx->runtime_config                          = std::make_shared<Config>(*g_ws_state.config);
     ctx->runtime_config->max_audio_sec           = 0.0F;
     ctx->runtime_config->live_flush_interval_sec = 5.0F;
-    ctx->realtime = RealtimeSession(ctx->connection_id, make_default_realtime_session_config(*ctx->runtime_config));
+    ctx->realtime =
+        RealtimeSession(ctx->connection_id, make_default_realtime_session_config(*ctx->runtime_config));
 
     if (ctx->realtime.config().input_sample_rate != ctx->runtime_config->sample_rate) {
       ctx->resampler = std::make_unique<StreamResampler>(ctx->realtime.config().input_sample_rate,
@@ -407,8 +435,9 @@ class RealtimeWsController : public drogon::WebSocketController<RealtimeWsContro
 
     spdlog::info(
         "RealtimeWS[{}]: connection opened from {}:{} target_sample_rate={} input_format={} input_rate={}",
-        ctx->connection_id, req->peerAddr().toIp(), req->peerAddr().toPort(), ctx->runtime_config->sample_rate,
-        ctx->realtime.config().input_audio_format, ctx->realtime.config().input_sample_rate);
+        ctx->connection_id, req->peerAddr().toIp(), req->peerAddr().toPort(),
+        ctx->runtime_config->sample_rate, ctx->realtime.config().input_audio_format,
+        ctx->realtime.config().input_sample_rate);
 
     conn->send(ctx->realtime.event_session_created(), drogon::WebSocketMessageType::Text);
     ASRMetrics::instance().connection_opened();
@@ -430,10 +459,24 @@ class RealtimeWsController : public drogon::WebSocketController<RealtimeWsContro
 
     const auto now = std::chrono::steady_clock::now();
     if (ctx->last_event_at.time_since_epoch().count() != 0) {
-      const double gap_sec = std::chrono::duration<double>(now - ctx->last_event_at).count();
+      const double gap_sec        = std::chrono::duration<double>(now - ctx->last_event_at).count();
       ctx->max_interevent_gap_sec = std::max(ctx->max_interevent_gap_sec, gap_sec);
     }
     ctx->last_event_at = now;
+
+    if (type == drogon::WebSocketMessageType::Binary) {
+      try {
+        handle_audio_append_binary(conn, *ctx, msg);
+      } catch (const AudioError& e) {
+        ++ctx->decode_errors;
+        send_error(conn, *ctx, "audio_decode_error", e.what(), "audio");
+      } catch (const std::exception& e) {
+        spdlog::error("RealtimeWS[{}]: exception: {}", ctx->connection_id, e.what());
+        ASRMetrics::instance().observe_error("realtime_ws_handler_exception");
+        send_error(conn, *ctx, "internal_error", e.what());
+      }
+      return;
+    }
 
     if (type != drogon::WebSocketMessageType::Text) {
       spdlog::debug("RealtimeWS[{}]: ignoring non-text frame type={}", ctx->connection_id,
@@ -459,8 +502,7 @@ class RealtimeWsController : public drogon::WebSocketController<RealtimeWsContro
     const std::string client_event_id = read_client_event_id(event);
     if (!event.contains("type") || !event["type"].is_string()) {
       ++ctx->invalid_events;
-      send_error(conn, *ctx, "invalid_event_type", "Event 'type' must be a string", "type",
-                 client_event_id);
+      send_error(conn, *ctx, "invalid_event_type", "Event 'type' must be a string", "type", client_event_id);
       return;
     }
 
@@ -520,19 +562,18 @@ class RealtimeWsController : public drogon::WebSocketController<RealtimeWsContro
     spdlog::info(
         "RealtimeWS[{}]: connection closed duration={:.1f}s reason={} append_events={} committed={} "
         "completed={} interim={} speech_started={} speech_stopped={} ping={} invalid={} decode_errors={} "
-        "raw_audio_sec={:.2f} input_audio_sec={:.2f} last_event='{}' last_error='{}' max_interevent_gap_sec={:.2f}",
+        "raw_audio_sec={:.2f} input_audio_sec={:.2f} last_event='{}' last_error='{}' "
+        "max_interevent_gap_sec={:.2f}",
         ctx ? ctx->connection_id : 0, duration, reason, ctx ? ctx->append_events : 0,
-        ctx ? ctx->committed_events : 0, ctx ? ctx->completed_events : 0,
-        ctx ? ctx->interim_events : 0, ctx ? ctx->speech_started_events : 0,
-        ctx ? ctx->speech_stopped_events : 0, ctx ? ctx->ping_events : 0, ctx ? ctx->invalid_events : 0,
-        ctx ? ctx->decode_errors : 0,
+        ctx ? ctx->committed_events : 0, ctx ? ctx->completed_events : 0, ctx ? ctx->interim_events : 0,
+        ctx ? ctx->speech_started_events : 0, ctx ? ctx->speech_stopped_events : 0,
+        ctx ? ctx->ping_events : 0, ctx ? ctx->invalid_events : 0, ctx ? ctx->decode_errors : 0,
         (ctx && ctx->realtime.config().input_sample_rate > 0)
             ? static_cast<double>(ctx->raw_input_samples) /
                   static_cast<double>(ctx->realtime.config().input_sample_rate)
             : 0.0,
         (ctx && ctx->runtime_config && ctx->runtime_config->sample_rate > 0)
-            ? static_cast<double>(ctx->input_samples) /
-                  static_cast<double>(ctx->runtime_config->sample_rate)
+            ? static_cast<double>(ctx->input_samples) / static_cast<double>(ctx->runtime_config->sample_rate)
             : 0.0,
         ctx ? ctx->last_client_event_type : "<none>", ctx ? ctx->last_error : "<none>",
         ctx ? ctx->max_interevent_gap_sec : 0.0);
@@ -564,8 +605,7 @@ class RealtimeWsController : public drogon::WebSocketController<RealtimeWsContro
   }
 
   static void send_error(const drogon::WebSocketConnectionPtr& conn, RealtimeConnectionContext& ctx,
-                         const std::string& code, const std::string& message,
-                         const std::string& param           = "",
+                         const std::string& code, const std::string& message, const std::string& param = "",
                          const std::string& client_event_id = "") {
     ctx.last_error = code + ":" + message;
     conn->send(ctx.realtime.event_error(code, message, param, client_event_id),
@@ -573,22 +613,35 @@ class RealtimeWsController : public drogon::WebSocketController<RealtimeWsContro
   }
 
   static void rebuild_pipeline(RealtimeConnectionContext& ctx) {
+    const auto& realtime_cfg = ctx.realtime.config();
+
     ctx.runtime_config->max_audio_sec           = 0.0F;
     ctx.runtime_config->live_flush_interval_sec = 5.0F;
-    if (ctx.realtime.config().turn_detection.has_value()) {
-      ctx.runtime_config->vad_threshold = ctx.realtime.config().turn_detection->threshold;
-      ctx.runtime_config->vad_min_silence =
-          static_cast<float>(ctx.realtime.config().turn_detection->silence_duration_ms) / 1000.0F;
+    if (realtime_cfg.turn_detection.has_value()) {
+      const auto& turn                    = realtime_cfg.turn_detection.value();
+      ctx.runtime_config->vad_threshold   = turn.threshold;
+      ctx.runtime_config->vad_min_silence = static_cast<float>(turn.silence_duration_ms) / 1000.0F;
     }
 
-    if (ctx.realtime.config().input_sample_rate != ctx.runtime_config->sample_rate) {
-      ctx.resampler = std::make_unique<StreamResampler>(ctx.realtime.config().input_sample_rate,
-                                                        ctx.runtime_config->sample_rate);
+    if (realtime_cfg.input_sample_rate != ctx.runtime_config->sample_rate) {
+      ctx.resampler =
+          std::make_unique<StreamResampler>(realtime_cfg.input_sample_rate, ctx.runtime_config->sample_rate);
     } else {
       ctx.resampler.reset();
     }
 
-    const auto vad_cfg = make_realtime_vad_config(*ctx.runtime_config, ctx.realtime.config());
+    if (realtime_cfg.input_audio_format == "opus") {
+      ctx.opus_decoder = std::make_unique<RealtimeOpusDecoder>(realtime_cfg.input_sample_rate);
+    } else {
+      ctx.opus_decoder.reset();
+    }
+
+    ctx.decoded_audio_bytes.clear();
+    ctx.decoded_audio_samples.clear();
+    ctx.decoded_audio_bytes.reserve(static_cast<size_t>(64U) * static_cast<size_t>(1024U));
+    ctx.decoded_audio_samples.reserve(static_cast<size_t>(ctx.runtime_config->sample_rate));
+
+    const auto vad_cfg = make_realtime_vad_config(*ctx.runtime_config, realtime_cfg);
     ctx.session        = std::make_shared<ASRSession>(*g_ws_state.recognizer, vad_cfg, *ctx.runtime_config);
     ctx.speech_active  = false;
     ctx.realtime.clear_current_item();
@@ -611,8 +664,8 @@ class RealtimeWsController : public drogon::WebSocketController<RealtimeWsContro
     return parsed["text"].get<std::string>();
   }
 
-  static size_t emit_transcription_events(const drogon::WebSocketConnectionPtr&      conn,
-                                          RealtimeConnectionContext&                  ctx,
+  static size_t emit_transcription_events(const drogon::WebSocketConnectionPtr&   conn,
+                                          RealtimeConnectionContext&              ctx,
                                           asr::span<const ASRSession::OutMessage> out_messages) {
     size_t finals = 0;
     for (const auto& out : out_messages) {
@@ -634,18 +687,18 @@ class RealtimeWsController : public drogon::WebSocketController<RealtimeWsContro
       spdlog::info(
           "RealtimeWS[{}]: transcription.completed item_id={} previous_item_id={} text_len={} "
           "append_events={} input_audio_sec={:.2f}",
-          ctx.connection_id, commit.item_id, commit.previous_item_id.empty() ? "<none>" : commit.previous_item_id,
-          text.size(), ctx.append_events,
+          ctx.connection_id, commit.item_id,
+          commit.previous_item_id.empty() ? "<none>" : commit.previous_item_id, text.size(),
+          ctx.append_events,
           (ctx.runtime_config && ctx.runtime_config->sample_rate > 0)
-              ? static_cast<double>(ctx.input_samples) /
-                    static_cast<double>(ctx.runtime_config->sample_rate)
+              ? static_cast<double>(ctx.input_samples) / static_cast<double>(ctx.runtime_config->sample_rate)
               : 0.0);
     }
     return finals;
   }
 
   static void emit_speech_transition_events(const drogon::WebSocketConnectionPtr& conn,
-                                            RealtimeConnectionContext&             ctx) {
+                                            RealtimeConnectionContext&            ctx) {
     if (!ctx.realtime.config().turn_detection.has_value()) {
       return;
     }
@@ -671,16 +724,15 @@ class RealtimeWsController : public drogon::WebSocketController<RealtimeWsContro
   }
 
   static void handle_session_update(const drogon::WebSocketConnectionPtr& conn,
-                                    RealtimeConnectionContext&             ctx,
-                                    const nlohmann::json&                  event,
-                                    const std::string&                     client_event_id) {
+                                    RealtimeConnectionContext& ctx, const nlohmann::json& event,
+                                    const std::string& client_event_id) {
     if (!event.contains("session")) {
       send_error(conn, ctx, "missing_session", "Event must include 'session' object", "session",
                  client_event_id);
       return;
     }
 
-    nlohmann::json sanitized_update = event["session"];
+    nlohmann::json sanitized_update       = event["session"];
     bool           ignored_turn_detection = false;
     if (sanitized_update.is_object() && sanitized_update.contains("turn_detection")) {
       sanitized_update.erase("turn_detection");
@@ -702,34 +754,49 @@ class RealtimeWsController : public drogon::WebSocketController<RealtimeWsContro
           ctx.connection_id, client_event_id, ctx.runtime_config->vad_threshold,
           static_cast<int>(ctx.runtime_config->vad_min_silence * 1000.0F));
     }
-    if (ctx.realtime.config().turn_detection.has_value()) {
+    const auto& realtime_cfg = ctx.realtime.config();
+    if (realtime_cfg.turn_detection.has_value()) {
+      const auto& turn = realtime_cfg.turn_detection.value();
       spdlog::info(
-          "RealtimeWS[{}]: session.update applied event_id='{}' input_format={} input_rate={} turn=server_vad "
+          "RealtimeWS[{}]: session.update applied event_id='{}' input_format={} input_rate={} "
+          "turn=server_vad "
           "threshold={:.3f} silence_ms={}",
-          ctx.connection_id, client_event_id, ctx.realtime.config().input_audio_format,
-          ctx.realtime.config().input_sample_rate, ctx.realtime.config().turn_detection->threshold,
-          ctx.realtime.config().turn_detection->silence_duration_ms);
+          ctx.connection_id, client_event_id, realtime_cfg.input_audio_format, realtime_cfg.input_sample_rate,
+          turn.threshold, turn.silence_duration_ms);
     } else {
       spdlog::info(
           "RealtimeWS[{}]: session.update applied event_id='{}' input_format={} input_rate={} turn=null",
-          ctx.connection_id, client_event_id, ctx.realtime.config().input_audio_format,
-          ctx.realtime.config().input_sample_rate);
+          ctx.connection_id, client_event_id, realtime_cfg.input_audio_format,
+          realtime_cfg.input_sample_rate);
     }
   }
 
-  static void handle_audio_append(const drogon::WebSocketConnectionPtr& conn,
-                                  RealtimeConnectionContext&             ctx,
-                                  const nlohmann::json&                  event,
-                                  const std::string&                     client_event_id) {
-    if (!event.contains("audio") || !event["audio"].is_string()) {
-      send_error(conn, ctx, "invalid_audio", "Event must include base64 string field 'audio'", "audio",
-                 client_event_id);
-      return;
+  static span<const float> decode_append_samples(RealtimeConnectionContext& ctx,
+                                                 span<const uint8_t>        audio_bytes) {
+    const auto& format = ctx.realtime.config().input_audio_format;
+    if (format.empty() || format == "pcm16") {
+      pcm16_to_float32_into(audio_bytes, ctx.decoded_audio_samples);
+      return ctx.decoded_audio_samples;
     }
 
+    if (format == "opus") {
+      if (!ctx.opus_decoder) {
+        ctx.opus_decoder = std::make_unique<RealtimeOpusDecoder>(ctx.realtime.config().input_sample_rate);
+      }
+      return ctx.opus_decoder->decode_packet(audio_bytes);
+    }
+
+    if (format == "g711_ulaw" || format == "g711_alaw") {
+      throw AudioError("Realtime format '" + format + "' is not implemented");
+    }
+    throw AudioError("Unsupported realtime audio format '" + format + "'");
+  }
+
+  static void process_audio_append_samples(const drogon::WebSocketConnectionPtr& conn,
+                                           RealtimeConnectionContext& ctx, span<const float> samples,
+                                           const std::string& client_event_id, const char* payload_label,
+                                           size_t payload_size) {
     ++ctx.append_events;
-    auto samples = decode_realtime_audio(event["audio"].get<std::string>(),
-                                         ctx.realtime.config().input_audio_format);
     ctx.raw_input_samples += samples.size();
 
     asr::span<const ASRSession::OutMessage> out_messages;
@@ -738,11 +805,11 @@ class RealtimeWsController : public drogon::WebSocketController<RealtimeWsContro
       auto resampled = ctx.resampler->process(samples);
       ctx.input_samples += resampled.size();
       asr_samples_in = resampled.size();
-      out_messages = ctx.session->on_audio(resampled);
+      out_messages   = ctx.session->on_audio(resampled);
     } else {
       ctx.input_samples += samples.size();
       asr_samples_in = samples.size();
-      out_messages = ctx.session->on_audio(samples);
+      out_messages   = ctx.session->on_audio(samples);
     }
 
     size_t interim_count = 0;
@@ -762,21 +829,55 @@ class RealtimeWsController : public drogon::WebSocketController<RealtimeWsContro
     if (ctx.append_events == 1 || ctx.append_events % 250 == 0 || emitted_finals > 0) {
       const double input_audio_sec =
           (ctx.runtime_config && ctx.runtime_config->sample_rate > 0)
-              ? static_cast<double>(ctx.input_samples) /
-                    static_cast<double>(ctx.runtime_config->sample_rate)
+              ? static_cast<double>(ctx.input_samples) / static_cast<double>(ctx.runtime_config->sample_rate)
               : 0.0;
+      uint64_t opus_lost = 0;
+      uint64_t opus_plc  = 0;
+      uint64_t opus_fec  = 0;
+      uint64_t opus_dup  = 0;
+      uint64_t opus_ooo  = 0;
+      if (ctx.opus_decoder && ctx.realtime.config().input_audio_format == "opus") {
+        const auto& stats = ctx.opus_decoder->stats();
+        opus_lost         = stats.lost_packets;
+        opus_plc          = stats.plc_packets;
+        opus_fec          = stats.fec_packets;
+        opus_dup          = stats.duplicate_packets;
+        opus_ooo          = stats.out_of_order_packets;
+      }
+
       spdlog::info(
-          "RealtimeWS[{}]: append#{} event_id='{}' b64_len={} decoded_samples={} asr_samples={} "
-          "interim={} final={} speech_active={} input_audio_sec={:.2f}",
-          ctx.connection_id, ctx.append_events, client_event_id,
-          event.contains("audio") && event["audio"].is_string() ? event["audio"].get<std::string>().size() : 0,
-          samples.size(), asr_samples_in, interim_count, final_count, ctx.speech_active ? "true" : "false",
-          input_audio_sec);
+          "RealtimeWS[{}]: append#{} event_id='{}' {}={} decoded_samples={} asr_samples={} "
+          "interim={} final={} speech_active={} input_audio_sec={:.2f} "
+          "opus_lost={} opus_plc={} opus_fec={} opus_dup={} opus_ooo={}",
+          ctx.connection_id, ctx.append_events, client_event_id, payload_label, payload_size, samples.size(),
+          asr_samples_in, interim_count, final_count, ctx.speech_active ? "true" : "false", input_audio_sec,
+          opus_lost, opus_plc, opus_fec, opus_dup, opus_ooo);
     }
   }
 
+  static void handle_audio_append(const drogon::WebSocketConnectionPtr& conn, RealtimeConnectionContext& ctx,
+                                  const nlohmann::json& event, const std::string& client_event_id) {
+    if (!event.contains("audio") || !event["audio"].is_string()) {
+      send_error(conn, ctx, "invalid_audio", "Event must include base64 string field 'audio'", "audio",
+                 client_event_id);
+      return;
+    }
+
+    const auto& b64_audio = event["audio"].get_ref<const std::string&>();
+    base64_decode_into(b64_audio, ctx.decoded_audio_bytes);
+    auto samples = decode_append_samples(ctx, ctx.decoded_audio_bytes);
+    process_audio_append_samples(conn, ctx, samples, client_event_id, "b64_len", b64_audio.size());
+  }
+
+  static void handle_audio_append_binary(const drogon::WebSocketConnectionPtr& conn,
+                                         RealtimeConnectionContext& ctx, const std::string& payload) {
+    auto bytes   = asr::span<const uint8_t>(reinterpret_cast<const uint8_t*>(payload.data()), payload.size());
+    auto samples = decode_append_samples(ctx, bytes);
+    process_audio_append_samples(conn, ctx, samples, "<binary>", "bin_len", payload.size());
+  }
+
   static void handle_audio_commit(const drogon::WebSocketConnectionPtr& conn,
-                                  RealtimeConnectionContext&             ctx) {
+                                  RealtimeConnectionContext&            ctx) {
     spdlog::info("RealtimeWS[{}]: input_audio_buffer.commit requested append_events={} speech_active={}",
                  ctx.connection_id, ctx.append_events, ctx.speech_active ? "true" : "false");
 
@@ -802,8 +903,7 @@ class RealtimeWsController : public drogon::WebSocketController<RealtimeWsContro
                  ctx.connection_id, finals, ctx.committed_events, ctx.completed_events);
   }
 
-  static void handle_audio_clear(const drogon::WebSocketConnectionPtr& conn,
-                                 RealtimeConnectionContext&             ctx) {
+  static void handle_audio_clear(const drogon::WebSocketConnectionPtr& conn, RealtimeConnectionContext& ctx) {
     ctx.session->on_reset();
     if (ctx.resampler) {
       ctx.resampler->reset();
@@ -991,21 +1091,22 @@ void Server::setup_http_handlers() {
         }
 
         try {
-          // Decode uploaded audio
-          auto         preprocess_start = std::chrono::steady_clock::now();
-          auto         audio            = decode_audio(file_data, file.getFileName(), config_.sample_rate);
-          auto         preprocess_end   = std::chrono::steady_clock::now();
-          const double preprocess_sec =
-              std::chrono::duration<double>(preprocess_end - preprocess_start).count();
+          std::string text;
+          double      decode_sec = 0.0;
 
-          // Recognize
-          auto decode_start = std::chrono::steady_clock::now();
-          auto text = recognize_audio_chunked(audio.samples, config_.sample_rate, kHttpRecognitionChunkSec,
-                                              [this](span<const float> chunk, int sample_rate) {
-                                                return recognizer_.recognize(chunk, sample_rate);
-                                              });
-          auto decode_end         = std::chrono::steady_clock::now();
-          const double decode_sec = std::chrono::duration<double>(decode_end - decode_start).count();
+          auto       pipeline_start = std::chrono::steady_clock::now();
+          const auto audio          = decode_audio_streamed(
+              file_data, file.getFileName(), config_.sample_rate, http_chunk_samples(config_.sample_rate),
+              [this, &text, &decode_sec](span<const float> chunk) {
+                auto t0       = std::chrono::steady_clock::now();
+                auto chunk_tx = recognizer_.recognize(chunk, config_.sample_rate);
+                auto t1       = std::chrono::steady_clock::now();
+                decode_sec += std::chrono::duration<double>(t1 - t0).count();
+                append_transcription_chunk(text, chunk_tx);
+              });
+          auto         pipeline_end   = std::chrono::steady_clock::now();
+          const double preprocess_sec = std::max(
+              0.0, std::chrono::duration<double>(pipeline_end - pipeline_start).count() - decode_sec);
 
           auto         end_ts    = std::chrono::steady_clock::now();
           const double total_sec = std::chrono::duration<double>(end_ts - start_ts).count();
@@ -1115,8 +1216,8 @@ void Server::setup_http_handlers() {
       return;
     }
 
-    const std::string upload_file_name = upload->getFileName();
-    const std::string upload_file_content(upload->fileContent());
+    const std::string upload_file_name    = upload->getFileName();
+    const auto&       upload_file_content = upload->fileContent();
 
     if (upload_file_content.size() > config_.max_upload_bytes) {
       callback(make_error_and_release(drogon::k413RequestEntityTooLarge, "File too large", "file_too_large",
@@ -1133,18 +1234,22 @@ void Server::setup_http_handlers() {
     }
 
     try {
-      auto         preprocess_start = std::chrono::steady_clock::now();
-      auto         audio            = decode_audio(file_data, upload_file_name, config_.sample_rate);
-      auto         preprocess_end   = std::chrono::steady_clock::now();
-      const double preprocess_sec = std::chrono::duration<double>(preprocess_end - preprocess_start).count();
+      std::string text;
+      double      decode_sec = 0.0;
 
-      auto decode_start = std::chrono::steady_clock::now();
-      auto text       = recognize_audio_chunked(audio.samples, config_.sample_rate, kHttpRecognitionChunkSec,
-                                                [this](span<const float> chunk, int sample_rate) {
-                                            return recognizer_.recognize(chunk, sample_rate);
-                                          });
-      auto decode_end = std::chrono::steady_clock::now();
-      const double decode_sec = std::chrono::duration<double>(decode_end - decode_start).count();
+      auto       pipeline_start = std::chrono::steady_clock::now();
+      const auto audio          = decode_audio_streamed(
+          file_data, upload_file_name, config_.sample_rate, http_chunk_samples(config_.sample_rate),
+          [this, &text, &decode_sec](span<const float> chunk) {
+            auto t0       = std::chrono::steady_clock::now();
+            auto chunk_tx = recognizer_.recognize(chunk, config_.sample_rate);
+            auto t1       = std::chrono::steady_clock::now();
+            decode_sec += std::chrono::duration<double>(t1 - t0).count();
+            append_transcription_chunk(text, chunk_tx);
+          });
+      auto         pipeline_end = std::chrono::steady_clock::now();
+      const double preprocess_sec =
+          std::max(0.0, std::chrono::duration<double>(pipeline_end - pipeline_start).count() - decode_sec);
 
       auto         end_ts    = std::chrono::steady_clock::now();
       const double total_sec = std::chrono::duration<double>(end_ts - start_ts).count();
