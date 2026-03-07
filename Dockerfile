@@ -97,11 +97,13 @@ WORKDIR /app
 COPY --from=builder /build/build/release/asr-server /app/asr-server
 
 # Copy onnxruntime shared library (downloaded by FetchContent)
-COPY --from=builder /build/build/_shared_deps/onnxruntime/onnxruntime-linux-x64-*/lib/libonnxruntime* /usr/local/lib/
+# Supports both amd64 (x64) and arm64 (aarch64) package directories.
+COPY --from=builder /build/build/_shared_deps/onnxruntime/onnxruntime-linux-*/lib/libonnxruntime* /usr/local/lib/
 
 # Copy required system libraries (libgomp, libssl, zlib, libjsoncpp, libuuid)
-COPY --from=builder /lib/x86_64-linux-gnu /lib/x86_64-linux-gnu
-COPY --from=builder /usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
+# from the active Debian multiarch directory (x86_64-linux-gnu or aarch64-linux-gnu).
+COPY --from=builder /lib/*-linux-gnu /lib/
+COPY --from=builder /usr/lib/*-linux-gnu /usr/lib/
 
 # Copy static files and models
 COPY --from=web-builder /build/static/ /app/static/

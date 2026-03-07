@@ -113,6 +113,13 @@ docker build -f Dockerfile.cuda -t asr-server-cpp:cuda .
 docker run -p 8081:8081 --gpus all -e PROVIDER=cuda asr-server-cpp:cuda
 ```
 
+CPU Docker-образ теперь собирается для текущей архитектуры Docker (`linux/amd64` или `linux/arm64`).
+CUDA-образ использует prebuilt ONNX Runtime только для `x64`, поэтому на ARM-хостах собирайте с платформой:
+
+```bash
+docker build --platform=linux/amd64 -f Dockerfile.cuda -t asr-server-cpp:cuda .
+```
+
 Dockerfile уже разбит на этапы `deps-builder` и `builder`, поэтому при изменении только `src/` или `include/` тяжёлые third-party зависимости переиспользуются из кэша слоёв и не пересобираются с нуля.
 
 ## Переменные окружения

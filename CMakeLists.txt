@@ -83,13 +83,39 @@ option(ASR_ENABLE_CUDA "Enable GPU onnxruntime" OFF)
 set(ONNXRUNTIME_VERSION "1.23.2")
 set(ONNXRUNTIME_CACHE_ROOT "${CMAKE_SOURCE_DIR}/build/_shared_deps/onnxruntime" CACHE PATH
     "Shared ONNX Runtime cache directory across CMake presets")
-if(ASR_ENABLE_CUDA)
-    set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}")
-    set(ONNXRUNTIME_SHA256 "295b0572870c89b3cfb9fd7893090da5e4b42e40933d8e5c7781de1f927381f2")
+
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" ASR_SYSTEM_PROCESSOR)
+if(ASR_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64)$")
+    set(ONNXRUNTIME_ARCH "x64")
+elseif(ASR_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+    set(ONNXRUNTIME_ARCH "aarch64")
 else()
-    set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}")
-    set(ONNXRUNTIME_SHA256 "1fa4dcaef22f6f7d5cd81b28c2800414350c10116f5fdd46a2160082551c5f9b")
+    message(FATAL_ERROR
+        "Unsupported CPU architecture for prebuilt ONNX Runtime: ${CMAKE_SYSTEM_PROCESSOR}.\n"
+        "Supported values: x86_64/amd64, aarch64/arm64.")
 endif()
+
+if(ASR_ENABLE_CUDA)
+    if(NOT ONNXRUNTIME_ARCH STREQUAL "x64")
+        message(FATAL_ERROR
+            "CUDA prebuilt ONNX Runtime is only available for x64.\n"
+            "Current architecture: ${CMAKE_SYSTEM_PROCESSOR}.\n"
+            "Use CPU build or build Docker image with --platform=linux/amd64.")
+    endif()
+    set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-linux-${ONNXRUNTIME_ARCH}-gpu-${ONNXRUNTIME_VERSION}")
+    set(ONNXRUNTIME_SHA256 "2083e361072a79ce16a90dcd5f5cb3ab92574a82a3ce0ac01e5cfa3158176f53")
+else()
+    set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-linux-${ONNXRUNTIME_ARCH}-${ONNXRUNTIME_VERSION}")
+    if(ONNXRUNTIME_ARCH STREQUAL "x64")
+        set(ONNXRUNTIME_SHA256 "1fa4dcaef22f6f7d5cd81b28c2800414350c10116f5fdd46a2160082551c5f9b")
+    elseif(ONNXRUNTIME_ARCH STREQUAL "aarch64")
+        set(ONNXRUNTIME_SHA256 "7c63c73560ed76b1fac6cff8204ffe34fe180e70d6582b5332ec094810241e5c")
+    endif()
+endif()
+
+message(STATUS
+    "Using ONNX Runtime package '${ONNXRUNTIME_PACKAGE_NAME}' "
+    "for processor '${CMAKE_SYSTEM_PROCESSOR}'")
 set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${ONNXRUNTIME_PACKAGE_NAME}.tgz")
 set(ONNXRUNTIME_ARCHIVE "${ONNXRUNTIME_CACHE_ROOT}/${ONNXRUNTIME_PACKAGE_NAME}.tgz")
 set(ONNXRUNTIME_DIR "${ONNXRUNTIME_CACHE_ROOT}/${ONNXRUNTIME_PACKAGE_NAME}")
