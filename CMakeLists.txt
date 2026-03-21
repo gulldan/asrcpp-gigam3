@@ -99,31 +99,44 @@ else()
         "Supported values: x86_64/amd64, aarch64/arm64.")
 endif()
 
-if(ASR_ENABLE_CUDA)
-    if(NOT ONNXRUNTIME_ARCH STREQUAL "x64")
-        message(FATAL_ERROR
-            "CUDA prebuilt ONNX Runtime is only available for x64.\n"
-            "Current architecture: ${CMAKE_SYSTEM_PROCESSOR}.\n"
-            "Use CPU build or build Docker image with --platform=linux/amd64.")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    if(ASR_ENABLE_CUDA)
+        if(NOT ONNXRUNTIME_ARCH STREQUAL "x64")
+            message(FATAL_ERROR
+                "CUDA prebuilt ONNX Runtime is only available for x64.\n"
+                "Current architecture: ${CMAKE_SYSTEM_PROCESSOR}.\n"
+                "Use CPU build or build Docker image with --platform=linux/amd64.")
+        endif()
+        set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-linux-${ONNXRUNTIME_ARCH}-gpu-${ONNXRUNTIME_VERSION}")
+        set(ONNXRUNTIME_SHA256 "2083e361072a79ce16a90dcd5f5cb3ab92574a82a3ce0ac01e5cfa3158176f53")
+    else()
+        set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-linux-${ONNXRUNTIME_ARCH}-${ONNXRUNTIME_VERSION}")
+        if(ONNXRUNTIME_ARCH STREQUAL "x64")
+            set(ONNXRUNTIME_SHA256 "1fa4dcaef22f6f7d5cd81b28c2800414350c10116f5fdd46a2160082551c5f9b")
+        elseif(ONNXRUNTIME_ARCH STREQUAL "aarch64")
+            set(ONNXRUNTIME_SHA256 "7c63c73560ed76b1fac6cff8204ffe34fe180e70d6582b5332ec094810241e5c")
+        endif()
     endif()
-    set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-linux-${ONNXRUNTIME_ARCH}-gpu-${ONNXRUNTIME_VERSION}")
-    set(ONNXRUNTIME_SHA256 "2083e361072a79ce16a90dcd5f5cb3ab92574a82a3ce0ac01e5cfa3158176f53")
+    set(ONNXRUNTIME_LIB_BASENAME "libonnxruntime.so")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    if(ASR_ENABLE_CUDA)
+        message(FATAL_ERROR "CUDA prebuilt ONNX Runtime is not available on macOS.")
+    endif()
+    set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-osx-universal2-${ONNXRUNTIME_VERSION}")
+    set(ONNXRUNTIME_SHA256 "49ae8e3a66ccb18d98ad3fe7f5906b6d7887df8a5edd40f49eb2b14e20885809")
+    set(ONNXRUNTIME_LIB_BASENAME "libonnxruntime.dylib")
 else()
-    set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-linux-${ONNXRUNTIME_ARCH}-${ONNXRUNTIME_VERSION}")
-    if(ONNXRUNTIME_ARCH STREQUAL "x64")
-        set(ONNXRUNTIME_SHA256 "1fa4dcaef22f6f7d5cd81b28c2800414350c10116f5fdd46a2160082551c5f9b")
-    elseif(ONNXRUNTIME_ARCH STREQUAL "aarch64")
-        set(ONNXRUNTIME_SHA256 "7c63c73560ed76b1fac6cff8204ffe34fe180e70d6582b5332ec094810241e5c")
-    endif()
+    message(FATAL_ERROR
+        "Unsupported operating system for prebuilt ONNX Runtime: ${CMAKE_SYSTEM_NAME}")
 endif()
 
 message(STATUS
     "Using ONNX Runtime package '${ONNXRUNTIME_PACKAGE_NAME}' "
-    "for processor '${CMAKE_SYSTEM_PROCESSOR}'")
+    "for system '${CMAKE_SYSTEM_NAME}' and processor '${CMAKE_SYSTEM_PROCESSOR}'")
 set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${ONNXRUNTIME_PACKAGE_NAME}.tgz")
 set(ONNXRUNTIME_ARCHIVE "${ONNXRUNTIME_CACHE_ROOT}/${ONNXRUNTIME_PACKAGE_NAME}.tgz")
 set(ONNXRUNTIME_DIR "${ONNXRUNTIME_CACHE_ROOT}/${ONNXRUNTIME_PACKAGE_NAME}")
-set(ONNXRUNTIME_LIB "${ONNXRUNTIME_DIR}/lib/libonnxruntime.so")
+set(ONNXRUNTIME_LIB "${ONNXRUNTIME_DIR}/lib/${ONNXRUNTIME_LIB_BASENAME}")
 set(ONNXRUNTIME_HEADER "${ONNXRUNTIME_DIR}/include/onnxruntime_cxx_api.h")
 
 if(NOT EXISTS "${ONNXRUNTIME_LIB}" OR NOT EXISTS "${ONNXRUNTIME_HEADER}")
@@ -184,10 +197,13 @@ set(SHERPA_ONNX_USE_PRE_INSTALLED_ONNXRUNTIME_IF_AVAILABLE ON CACHE BOOL "" FORC
 set(ENV{SHERPA_ONNXRUNTIME_INCLUDE_DIR} "${ONNXRUNTIME_DIR}/include")
 set(ENV{SHERPA_ONNXRUNTIME_LIB_DIR} "${ONNXRUNTIME_DIR}/lib")
 
+# Pin to the exact commit behind v1.12.31 so FetchContent stays reproducible
+# even if the upstream tag is ever re-pointed.
+set(SHERPA_ONNX_GIT_TAG "e0ab4a8beb10477d25ef48e518a537995c38c698")
+
 FetchContent_Declare(sherpa_onnx
     GIT_REPOSITORY https://github.com/k2-fsa/sherpa-onnx.git
-    GIT_TAG        v1.12.28
-    GIT_SHALLOW    TRUE
+    GIT_TAG        ${SHERPA_ONNX_GIT_TAG}
 )
 FetchContent_MakeAvailable(sherpa_onnx)
 
@@ -217,7 +233,7 @@ endif()
 if(NOT TARGET onnxruntime)
     add_library(onnxruntime SHARED IMPORTED)
     set_target_properties(onnxruntime PROPERTIES
-        IMPORTED_LOCATION "${ONNXRUNTIME_DIR}/lib/libonnxruntime.so"
+        IMPORTED_LOCATION "${ONNXRUNTIME_LIB}"
         INTERFACE_INCLUDE_DIRECTORIES "${ONNXRUNTIME_DIR}/include"
     )
 endif()
