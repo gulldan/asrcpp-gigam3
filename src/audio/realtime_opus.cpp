@@ -1,4 +1,6 @@
 #include <opus/opus.h>
+#include <opus/opus_defines.h>
+#include <opus/opus_types.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -6,6 +8,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <vector>
 
 #include "asr/audio.h"
 #include "asr/span.h"
@@ -93,12 +96,14 @@ uint16_t forward_sequence_delta(uint16_t prev, uint16_t current) {
 
 }  // namespace
 
-RealtimeOpusDecoder::RealtimeOpusDecoder(int sample_rate, size_t max_plc_packets, bool enable_fec)
+RealtimeOpusDecoder::RealtimeOpusDecoder(int sample_rate, size_t max_plc_packets, bool enable_fec,
+                                         OpusPacketMode packet_mode)
     : sample_rate_(sample_rate),
       max_frame_samples_(sample_rate_ * 120 / 1000),
       last_frame_samples_(sample_rate_ / 50),
       max_plc_packets_(std::max<size_t>(1, max_plc_packets)),
-      enable_fec_(enable_fec) {
+      enable_fec_(enable_fec),
+      packet_mode_(packet_mode) {
   if (!is_supported_opus_sample_rate(sample_rate_)) {
     throw AudioError("Unsupported Opus sample rate " + std::to_string(sample_rate_) +
                      "; supported: 8000, 12000, 16000, 24000, 48000");
@@ -133,7 +138,12 @@ span<const float> RealtimeOpusDecoder::decode_packet(span<const uint8_t> packet)
   }
 
   ParsedOpusPacket parsed;
-  if (try_parse_rtp_packet(packet, parsed)) {
+  if (packet_mode_ == OpusPacketMode::Rtp) {
+    if (!try_parse_rtp_packet(packet, parsed)) {
+      throw AudioError("Expected RTP packet with Opus payload");
+    }
+    ++stats_.rtp_packets;
+  } else if (packet_mode_ == OpusPacketMode::Auto && try_parse_rtp_packet(packet, parsed)) {
     ++stats_.rtp_packets;
   } else {
     parsed.payload = packet;
@@ -147,8 +157,12 @@ span<const float> RealtimeOpusDecoder::decode_packet(span<const uint8_t> packet)
     throw AudioError("Opus packet is too large");
   }
 
-  auto append_decoded = [this](const uint8_t* data, opus_int32 len, int frame_size, bool decode_fec) {
+  auto append_decoded = [this](const uint8_t* data, opus_int32 len, int frame_size, bool decode_fec,
+                               bool allow_failure = false) {
     if (frame_size <= 0 || frame_size > max_frame_samples_) {
+      if (allow_failure) {
+        return OPUS_BAD_ARG;
+      }
       throw AudioError("Invalid Opus frame size request");
     }
 
@@ -160,6 +174,9 @@ span<const float> RealtimeOpusDecoder::decode_packet(span<const uint8_t> packet)
                                           decode_fec ? 1 : 0);
     if (decoded < 0) {
       output_.resize(old_size);
+      if (allow_failure) {
+        return decoded;
+      }
       throw AudioError("Opus decode failed: " + opus_error_to_string(decoded));
     }
 
@@ -194,13 +211,13 @@ span<const float> RealtimeOpusDecoder::decode_packet(span<const uint8_t> packet)
       const int conceal_frame_size = std::clamp(last_frame_samples_, 1, max_frame_samples_);
 
       if (lost_packets == 1U && enable_fec_) {
-        try {
-          append_decoded(payload_ptr, payload_len, conceal_frame_size, true);
+        const int fec_decoded = append_decoded(payload_ptr, payload_len, conceal_frame_size, true, true);
+        if (fec_decoded >= 0) {
           ++stats_.fec_packets;
           lost_packets = 0;
-        } catch (const AudioError& e) {
+        } else {
           // FEC may be absent in incoming packets.
-          spdlog::debug("Opus FEC decode skipped: {}", e.what());
+          spdlog::debug("Opus FEC decode skipped: {}", opus_error_to_string(fec_decoded));
         }
       }
 

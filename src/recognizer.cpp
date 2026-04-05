@@ -4,11 +4,14 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
-#include <cstddef>
+#include <chrono>
 #include <cstdint>
+#include <memory>
+#include <ratio>
 #include <stdexcept>
 
 #include "asr/config.h"
+#include "asr/metrics.h"
 #include "asr/span.h"
 
 namespace asr {
@@ -18,7 +21,8 @@ Recognizer::Recognizer(const Config& cfg)
       decoder_path_(cfg.model_dir + "/decoder.onnx"),
       joiner_path_(cfg.model_dir + "/joiner.onnx"),
       tokens_path_(cfg.model_dir + "/tokens.txt"),
-      provider_(cfg.provider) {
+      provider_(cfg.provider),
+      wait_timeout_ms_(cfg.recognizer_wait_timeout_ms) {
   const int pool_size        = cfg.recognizer_pool_size > 0 ? cfg.recognizer_pool_size : 1;
   const int threads_per_slot = std::max(1, cfg.num_threads / pool_size);
 
@@ -78,39 +82,65 @@ std::string Recognizer::recognize(span<const float> audio, int sample_rate) {
     return {};
   }
 
-  // Acquire a free slot from the pool
-  const SherpaOnnxOfflineRecognizer* handle   = nullptr;
-  size_t                             slot_idx = 0;
+  struct SlotLease {
+    Recognizer* owner    = nullptr;
+    size_t      slot_idx = 0;
+
+    ~SlotLease() {
+      if (owner == nullptr) {
+        return;
+      }
+      {
+        const std::scoped_lock lock(owner->pool_mutex_);
+        owner->slots_[slot_idx].in_use = false;
+      }
+      owner->pool_cv_.notify_one();
+    }
+  };
+
+  const SherpaOnnxOfflineRecognizer* handle       = nullptr;
+  size_t                             slot_idx     = 0;
+  const auto                         wait_started = std::chrono::steady_clock::now();
   {
     std::unique_lock lock(pool_mutex_);
-    pool_cv_.wait(lock, [this, &slot_idx]() {
-      for (size_t i = 0; i < slots_.size(); ++i) {
-        // cppcheck-suppress useStlAlgorithm  ; need to capture index, not iterator
-        if (!slots_[i].in_use) {
-          slot_idx = i;
+    const bool       acquired =
+        pool_cv_.wait_for(lock, std::chrono::milliseconds(wait_timeout_ms_), [this, &slot_idx]() {
+          const auto it =
+              std::find_if(slots_.begin(), slots_.end(), [](const Slot& slot) { return !slot.in_use; });
+          if (it == slots_.end()) {
+            return false;
+          }
+          slot_idx = static_cast<size_t>(std::distance(slots_.begin(), it));
           return true;
-        }
-      }
-      return false;
-    });
+        });
+    const auto wait_sec =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - wait_started).count();
+    ASRMetrics::instance().observe_recognizer_wait(wait_sec, !acquired);
+    if (!acquired) {
+      throw RecognizerBusyError("Recognizer pool is saturated");
+    }
     slots_[slot_idx].in_use = true;
     handle                  = slots_[slot_idx].handle;
   }
+  SlotLease slot_lease{this, slot_idx};
 
-  // Decode (no mutex held — parallel inference is possible)
-  const SherpaOnnxOfflineStream* stream = SherpaOnnxCreateOfflineStream(handle);
+  using StreamHandle =
+      std::unique_ptr<const SherpaOnnxOfflineStream, decltype(&SherpaOnnxDestroyOfflineStream)>;
+  using ResultHandle = std::unique_ptr<const SherpaOnnxOfflineRecognizerResult,
+                                       decltype(&SherpaOnnxDestroyOfflineRecognizerResult)>;
+
+  StreamHandle stream(SherpaOnnxCreateOfflineStream(handle), &SherpaOnnxDestroyOfflineStream);
   if (stream == nullptr) {
     spdlog::error("Failed to create offline stream");
-    const std::scoped_lock lock(pool_mutex_);
-    slots_[slot_idx].in_use = false;
-    pool_cv_.notify_one();
     return {};
   }
 
-  SherpaOnnxAcceptWaveformOffline(stream, sample_rate, audio.data(), static_cast<int32_t>(audio.size()));
-  SherpaOnnxDecodeOfflineStream(handle, stream);
+  SherpaOnnxAcceptWaveformOffline(stream.get(), sample_rate, audio.data(),
+                                  static_cast<int32_t>(audio.size()));
+  SherpaOnnxDecodeOfflineStream(handle, stream.get());
 
-  const SherpaOnnxOfflineRecognizerResult* result = SherpaOnnxGetOfflineStreamResult(stream);
+  ResultHandle result(SherpaOnnxGetOfflineStreamResult(stream.get()),
+                      &SherpaOnnxDestroyOfflineRecognizerResult);
 
   std::string text;
   if (result != nullptr && result->text != nullptr) {
@@ -128,19 +158,11 @@ std::string Recognizer::recognize(span<const float> audio, int sample_rate) {
     }
   }
 
-  if (result != nullptr) {
-    SherpaOnnxDestroyOfflineRecognizerResult(result);
-  }
-  SherpaOnnxDestroyOfflineStream(stream);
-
-  // Release slot
-  {
-    const std::scoped_lock lock(pool_mutex_);
-    slots_[slot_idx].in_use = false;
-  }
-  pool_cv_.notify_one();
-
   return text;
+}
+
+bool Recognizer::ready() const noexcept {
+  return std::all_of(slots_.begin(), slots_.end(), [](const Slot& slot) { return slot.handle != nullptr; });
 }
 
 }  // namespace asr

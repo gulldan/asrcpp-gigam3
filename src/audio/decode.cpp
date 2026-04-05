@@ -1,15 +1,15 @@
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "asr/audio.h"
 #include "asr/span.h"
+#include "asr/string_utils.h"
 
 #define DR_WAV_IMPLEMENTATION
 #include "dr_wav.h"
@@ -23,13 +23,6 @@ namespace {
 
 constexpr uint64_t kMaxAudioFrames = 48000ULL * 3600ULL;  // 1 hour at 48kHz
 constexpr uint64_t kWavReadFrames  = 8192ULL;
-
-std::string to_lower_ascii(std::string_view value) {
-  std::string out(value.begin(), value.end());
-  std::transform(out.begin(), out.end(), out.begin(),
-                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-  return out;
-}
 
 std::string extension_from_filename(std::string_view file_name) {
   const auto pos = file_name.find_last_of('.');
@@ -47,6 +40,31 @@ std::string supported_audio_extensions_list() {
 #endif
 }
 
+void downmix_interleaved_to_mono(span<const float> interleaved, int channels, std::vector<float>& mono_out) {
+  if (channels <= 0) {
+    throw AudioError("Invalid audio channel count: " + std::to_string(channels));
+  }
+  if (interleaved.size() % static_cast<size_t>(channels) != 0U) {
+    throw AudioError("Invalid interleaved audio buffer size for " + std::to_string(channels) + " channels");
+  }
+
+  const size_t frames = interleaved.size() / static_cast<size_t>(channels);
+  mono_out.resize(frames);
+  if (channels == 1) {
+    std::copy(interleaved.begin(), interleaved.end(), mono_out.begin());
+    return;
+  }
+
+  for (size_t frame = 0; frame < frames; ++frame) {
+    float      sum  = 0.0F;
+    const auto base = frame * static_cast<size_t>(channels);
+    for (int ch = 0; ch < channels; ++ch) {
+      sum += interleaved[base + static_cast<size_t>(ch)];
+    }
+    mono_out[frame] = sum / static_cast<float>(channels);
+  }
+}
+
 class ChunkEmitter {
  public:
   ChunkEmitter(size_t chunk_samples, const AudioChunkCallback& on_chunk)
@@ -54,6 +72,7 @@ class ChunkEmitter {
     if (!on_chunk_) {
       throw AudioError("Streaming decode callback is empty");
     }
+    buffer_.reserve(chunk_samples_ * 2U);
   }
 
   void push(span<const float> samples) {
@@ -61,15 +80,16 @@ class ChunkEmitter {
       return;
     }
 
+    const size_t unread = buffer_.size() - offset_;
+    if (offset_ > 0 && buffer_.size() + samples.size() > buffer_.capacity()) {
+      std::move(buffer_.begin() + static_cast<ptrdiff_t>(offset_), buffer_.end(), buffer_.begin());
+      buffer_.resize(unread);
+      offset_ = 0;
+    }
     buffer_.insert(buffer_.end(), samples.begin(), samples.end());
     while (buffer_.size() - offset_ >= chunk_samples_) {
       on_chunk_({buffer_.data() + static_cast<ptrdiff_t>(offset_), chunk_samples_});
       offset_ += chunk_samples_;
-    }
-
-    if (offset_ > 0 && offset_ >= buffer_.size() / 2U) {
-      buffer_.erase(buffer_.begin(), buffer_.begin() + static_cast<ptrdiff_t>(offset_));
-      offset_ = 0;
     }
   }
 
@@ -90,8 +110,8 @@ class ChunkEmitter {
 };
 
 void validate_wav_header(const drwav& wav) {
-  if (wav.channels != 1) {
-    throw AudioError("Only mono audio is supported, got " + std::to_string(wav.channels) + " channels");
+  if (wav.channels == 0u) {
+    throw AudioError("WAV file has invalid channel count 0");
   }
 
   if (wav.totalPCMFrameCount == 0ULL) {
@@ -110,8 +130,11 @@ AudioStreamStats decode_wav_stream_impl(drwav& wav, int target_rate, size_t chun
 
   ChunkEmitter chunker(chunk_samples, on_chunk);
 
-  std::vector<float> read_buf(static_cast<size_t>(kWavReadFrames));
+  const int          channels   = static_cast<int>(wav.channels);
   const int          input_rate = static_cast<int>(wav.sampleRate);
+  std::vector<float> read_buf(static_cast<size_t>(kWavReadFrames) * static_cast<size_t>(channels));
+  std::vector<float> mono_buf;
+  mono_buf.reserve(static_cast<size_t>(kWavReadFrames));
 
   uint64_t total_output_samples = 0;
   if (input_rate == target_rate) {
@@ -120,8 +143,14 @@ AudioStreamStats decode_wav_stream_impl(drwav& wav, int target_rate, size_t chun
       if (frames_read == 0ULL) {
         break;
       }
-      const auto n = static_cast<size_t>(frames_read);
-      chunker.push({read_buf.data(), n});
+      if (channels == 1) {
+        chunker.push({read_buf.data(), static_cast<size_t>(frames_read)});
+      } else {
+        downmix_interleaved_to_mono(
+            {read_buf.data(), static_cast<size_t>(frames_read) * static_cast<size_t>(channels)}, channels,
+            mono_buf);
+        chunker.push(mono_buf);
+      }
       total_output_samples += frames_read;
     }
   } else {
@@ -131,7 +160,16 @@ AudioStreamStats decode_wav_stream_impl(drwav& wav, int target_rate, size_t chun
       if (frames_read == 0ULL) {
         break;
       }
-      const auto out = resampler.process({read_buf.data(), static_cast<size_t>(frames_read)});
+      span<const float> mono_chunk;
+      if (channels == 1) {
+        mono_chunk = {read_buf.data(), static_cast<size_t>(frames_read)};
+      } else {
+        downmix_interleaved_to_mono(
+            {read_buf.data(), static_cast<size_t>(frames_read) * static_cast<size_t>(channels)}, channels,
+            mono_buf);
+        mono_chunk = mono_buf;
+      }
+      const auto out = resampler.process(mono_chunk);
       chunker.push(out);
       total_output_samples += static_cast<uint64_t>(out.size());
     }
@@ -227,9 +265,9 @@ AudioData decode_opus_file(span<const uint8_t> data, int target_rate) {
   };
 
   const int channels = op_channel_count(of, -1);
-  if (channels != 1) {
+  if (channels <= 0) {
     cleanup();
-    throw AudioError("Only mono audio is supported, got " + std::to_string(channels) + " channels");
+    throw AudioError("Opus file has invalid channel count " + std::to_string(channels));
   }
 
   const opus_int64 total_frames = op_pcm_total(of, -1);
@@ -248,11 +286,19 @@ AudioData decode_opus_file(span<const uint8_t> data, int target_rate) {
     samples.reserve(static_cast<size_t>(std::max(estimate, 0.0)) + 64U);
   }
 
-  std::vector<float> read_buf(4096U);
+  std::vector<float> read_buf(4096U * static_cast<size_t>(std::max(channels, 2)));
+  std::vector<float> mono_buf;
+  mono_buf.reserve(4096U);
+
   if (target_rate == 48000) {
     for (;;) {
-      int section = 0;
-      int n       = op_read_float(of, read_buf.data(), static_cast<int>(read_buf.size()), &section);
+      int n = 0;
+      if (channels == 1) {
+        int section = 0;
+        n           = op_read_float(of, read_buf.data(), static_cast<int>(read_buf.size()), &section);
+      } else {
+        n = op_read_float_stereo(of, read_buf.data(), static_cast<int>(read_buf.size()));
+      }
       if (n == 0) {
         break;
       }
@@ -260,13 +306,23 @@ AudioData decode_opus_file(span<const uint8_t> data, int target_rate) {
         cleanup();
         throw AudioError("Failed to decode Opus packet: " + opusfile_error_message(n));
       }
-      samples.insert(samples.end(), read_buf.begin(), read_buf.begin() + n);
+      if (channels == 1) {
+        samples.insert(samples.end(), read_buf.begin(), read_buf.begin() + n);
+      } else {
+        downmix_interleaved_to_mono({read_buf.data(), static_cast<size_t>(n) * 2U}, 2, mono_buf);
+        samples.insert(samples.end(), mono_buf.begin(), mono_buf.end());
+      }
     }
   } else {
     StreamResampler resampler(48000, target_rate);
     for (;;) {
-      int section = 0;
-      int n       = op_read_float(of, read_buf.data(), static_cast<int>(read_buf.size()), &section);
+      int n = 0;
+      if (channels == 1) {
+        int section = 0;
+        n           = op_read_float(of, read_buf.data(), static_cast<int>(read_buf.size()), &section);
+      } else {
+        n = op_read_float_stereo(of, read_buf.data(), static_cast<int>(read_buf.size()));
+      }
       if (n == 0) {
         break;
       }
@@ -274,7 +330,15 @@ AudioData decode_opus_file(span<const uint8_t> data, int target_rate) {
         cleanup();
         throw AudioError("Failed to decode Opus packet: " + opusfile_error_message(n));
       }
-      auto out = resampler.process({read_buf.data(), static_cast<size_t>(n)});
+
+      span<const float> mono_chunk;
+      if (channels == 1) {
+        mono_chunk = {read_buf.data(), static_cast<size_t>(n)};
+      } else {
+        downmix_interleaved_to_mono({read_buf.data(), static_cast<size_t>(n) * 2U}, 2, mono_buf);
+        mono_chunk = mono_buf;
+      }
+      auto out = resampler.process(mono_chunk);
       samples.insert(samples.end(), out.begin(), out.end());
     }
     auto tail = resampler.flush();
@@ -310,9 +374,9 @@ AudioStreamStats decode_opus_file_streamed(span<const uint8_t> data, int target_
   };
 
   const int channels = op_channel_count(of, -1);
-  if (channels != 1) {
+  if (channels <= 0) {
     cleanup();
-    throw AudioError("Only mono audio is supported, got " + std::to_string(channels) + " channels");
+    throw AudioError("Opus file has invalid channel count " + std::to_string(channels));
   }
 
   const opus_int64 total_frames = op_pcm_total(of, -1);
@@ -322,13 +386,20 @@ AudioStreamStats decode_opus_file_streamed(span<const uint8_t> data, int target_
   }
 
   ChunkEmitter       chunker(chunk_samples, on_chunk);
-  std::vector<float> read_buf(4096U);
-  uint64_t           total_output_samples = 0;
+  std::vector<float> read_buf(4096U * static_cast<size_t>(std::max(channels, 2)));
+  std::vector<float> mono_buf;
+  mono_buf.reserve(4096U);
+  uint64_t total_output_samples = 0;
 
   if (target_rate == 48000) {
     for (;;) {
-      int section = 0;
-      int n       = op_read_float(of, read_buf.data(), static_cast<int>(read_buf.size()), &section);
+      int n = 0;
+      if (channels == 1) {
+        int section = 0;
+        n           = op_read_float(of, read_buf.data(), static_cast<int>(read_buf.size()), &section);
+      } else {
+        n = op_read_float_stereo(of, read_buf.data(), static_cast<int>(read_buf.size()));
+      }
       if (n == 0) {
         break;
       }
@@ -336,14 +407,24 @@ AudioStreamStats decode_opus_file_streamed(span<const uint8_t> data, int target_
         cleanup();
         throw AudioError("Failed to decode Opus packet: " + opusfile_error_message(n));
       }
-      chunker.push({read_buf.data(), static_cast<size_t>(n)});
+      if (channels == 1) {
+        chunker.push({read_buf.data(), static_cast<size_t>(n)});
+      } else {
+        downmix_interleaved_to_mono({read_buf.data(), static_cast<size_t>(n) * 2U}, 2, mono_buf);
+        chunker.push(mono_buf);
+      }
       total_output_samples += static_cast<uint64_t>(n);
     }
   } else {
     StreamResampler resampler(48000, target_rate);
     for (;;) {
-      int section = 0;
-      int n       = op_read_float(of, read_buf.data(), static_cast<int>(read_buf.size()), &section);
+      int n = 0;
+      if (channels == 1) {
+        int section = 0;
+        n           = op_read_float(of, read_buf.data(), static_cast<int>(read_buf.size()), &section);
+      } else {
+        n = op_read_float_stereo(of, read_buf.data(), static_cast<int>(read_buf.size()));
+      }
       if (n == 0) {
         break;
       }
@@ -352,7 +433,14 @@ AudioStreamStats decode_opus_file_streamed(span<const uint8_t> data, int target_
         throw AudioError("Failed to decode Opus packet: " + opusfile_error_message(n));
       }
 
-      auto out = resampler.process({read_buf.data(), static_cast<size_t>(n)});
+      span<const float> mono_chunk;
+      if (channels == 1) {
+        mono_chunk = {read_buf.data(), static_cast<size_t>(n)};
+      } else {
+        downmix_interleaved_to_mono({read_buf.data(), static_cast<size_t>(n) * 2U}, 2, mono_buf);
+        mono_chunk = mono_buf;
+      }
+      auto out = resampler.process(mono_chunk);
       chunker.push(out);
       total_output_samples += static_cast<uint64_t>(out.size());
     }
@@ -392,9 +480,9 @@ AudioData decode_wav(span<const uint8_t> data, int target_rate) {
     throw AudioError("Failed to decode WAV file: invalid format");
   }
 
-  if (wav.channels != 1) {
+  if (wav.channels == 0u) {
     drwav_uninit(&wav);
-    throw AudioError("Only mono audio is supported, got " + std::to_string(wav.channels) + " channels");
+    throw AudioError("WAV file has invalid channel count 0");
   }
 
   auto total_frames = static_cast<size_t>(wav.totalPCMFrameCount);
@@ -408,15 +496,25 @@ AudioData decode_wav(span<const uint8_t> data, int target_rate) {
     throw AudioError("WAV file too long: " + std::to_string(total_frames) + " frames exceeds 1-hour limit");
   }
 
-  std::vector<float> samples(total_frames);
-  auto               frames_read = drwav_read_pcm_frames_f32(&wav, total_frames, samples.data());
+  const int          channels = static_cast<int>(wav.channels);
+  std::vector<float> interleaved_samples(total_frames * static_cast<size_t>(channels));
+  auto               frames_read = drwav_read_pcm_frames_f32(&wav, total_frames, interleaved_samples.data());
   auto               input_rate  = static_cast<int>(wav.sampleRate);
   drwav_uninit(&wav);
 
   if (frames_read == 0) {
     throw AudioError("Failed to read PCM frames from WAV");
   }
-  samples.resize(static_cast<size_t>(frames_read));
+
+  std::vector<float> samples;
+  if (channels == 1) {
+    interleaved_samples.resize(static_cast<size_t>(frames_read));
+    samples = std::move(interleaved_samples);
+  } else {
+    downmix_interleaved_to_mono(
+        {interleaved_samples.data(), static_cast<size_t>(frames_read) * static_cast<size_t>(channels)},
+        channels, samples);
+  }
 
   if (input_rate == target_rate) {
     return {std::move(samples), static_cast<float>(static_cast<double>(frames_read) / target_rate)};
@@ -514,14 +612,13 @@ std::vector<float> decode_realtime_audio_bytes(span<const uint8_t> audio_bytes, 
     return pcm16_to_float32(audio_bytes);
   }
 
-  if (normalized == "opus") {
-    RealtimeOpusDecoder decoder(target_rate);
+  if (normalized == "opus" || normalized == "opus_raw" || normalized == "opus_rtp") {
+    const auto packet_mode = normalized == "opus_raw"
+                                 ? OpusPacketMode::Raw
+                                 : (normalized == "opus_rtp" ? OpusPacketMode::Rtp : OpusPacketMode::Auto);
+    RealtimeOpusDecoder decoder(target_rate, 8, true, packet_mode);
     auto                decoded = decoder.decode_packet(audio_bytes);
     return std::vector<float>(decoded.begin(), decoded.end());
-  }
-
-  if (normalized == "g711_ulaw" || normalized == "g711_alaw") {
-    throw AudioError("Realtime format '" + normalized + "' is not implemented");
   }
 
   throw AudioError("Unsupported realtime audio format '" + normalized + "'");

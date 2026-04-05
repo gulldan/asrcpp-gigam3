@@ -1,8 +1,12 @@
 #include <gtest/gtest.h>
+#include <math.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "asr/audio.h"
@@ -64,12 +68,19 @@ TEST(Audio, DecodeMono16kHz) {
   }
 }
 
-TEST(Audio, RejectStereo) {
-  const std::vector<float> stereo_samples(32000);  // 1 sec stereo at 16kHz
-  auto                     wav_data = make_wav(stereo_samples, 16000, 2);
+TEST(Audio, DecodeStereoDownmixesToMono) {
+  const std::vector<float> stereo_samples = {
+      0.25f, 0.75f, -1.0f, 1.0f, 0.60f, 0.20f,
+  };
+  auto wav_data = make_wav(stereo_samples, 16000, 2);
   ASSERT_FALSE(wav_data.empty());
 
-  EXPECT_THROW(decode_wav(wav_data, 16000), AudioError);
+  auto audio = decode_wav(wav_data, 16000);
+  ASSERT_EQ(audio.samples.size(), 3U);
+  EXPECT_NEAR(audio.samples[0], 0.50f, 1e-6f);
+  EXPECT_NEAR(audio.samples[1], 0.00f, 1e-6f);
+  EXPECT_NEAR(audio.samples[2], 0.40f, 1e-6f);
+  EXPECT_NEAR(audio.duration_sec, 3.0f / 16000.0f, 1e-6f);
 }
 
 TEST(Audio, RejectInvalid) {
@@ -178,8 +189,28 @@ TEST(Audio, StreamResamplerFlushDoesNotThrow) {
   });
 
   // Ensure returned spans are well-formed.
-  EXPECT_TRUE(out.size() <= 4800);
-  EXPECT_TRUE(tail.size() <= 64);
+  EXPECT_FALSE(out.empty());
+  EXPECT_NEAR(static_cast<double>(out.size() + tail.size()), 1600.0, 8.0);
+}
+
+TEST(Audio, StreamResamplerChunkedOutputPreservesDuration) {
+  auto               input = make_sine(330.0f, 1.0f, 48000);
+  StreamResampler    resampler(48000, 16000);
+  std::vector<float> chunked_output;
+
+  for (size_t offset = 0; offset < input.size();) {
+    const auto chunk_size = std::min<size_t>(1379U, input.size() - offset);
+    const auto out =
+        resampler.process(span<const float>(input.data() + static_cast<ptrdiff_t>(offset), chunk_size));
+    chunked_output.insert(chunked_output.end(), out.begin(), out.end());
+    offset += chunk_size;
+  }
+
+  const auto tail = resampler.flush();
+  chunked_output.insert(chunked_output.end(), tail.begin(), tail.end());
+
+  EXPECT_NEAR(static_cast<double>(chunked_output.size()), 16000.0, 24.0);
+  EXPECT_FALSE(chunked_output.empty());
 }
 
 TEST(Audio, DecodeAudioRejectsUnsupportedExtension) {
@@ -218,6 +249,27 @@ TEST(Audio, DecodeAudioStreamedWav) {
   EXPECT_FALSE(streamed.empty());
   EXPECT_EQ(stats.samples, streamed.size());
   EXPECT_NEAR(stats.duration_sec, 1.3f, 0.02f);
+}
+
+TEST(Audio, DecodeAudioStreamedStereoWavDownmixesToMono) {
+  const std::vector<float> stereo_samples = {
+      1.0f, -1.0f, 0.3f, 0.7f, -0.2f, 0.2f, 0.4f, 0.6f,
+  };
+  auto wav_data = make_wav(stereo_samples, 16000, 2);
+  ASSERT_FALSE(wav_data.empty());
+
+  std::vector<float> streamed;
+  const auto         stats = decode_audio_streamed(
+      wav_data, "voice.wav", 16000, 2U,
+      [&streamed](span<const float> chunk) { streamed.insert(streamed.end(), chunk.begin(), chunk.end()); });
+
+  ASSERT_EQ(streamed.size(), 4U);
+  EXPECT_NEAR(streamed[0], 0.0f, 1e-6f);
+  EXPECT_NEAR(streamed[1], 0.5f, 1e-6f);
+  EXPECT_NEAR(streamed[2], 0.0f, 1e-6f);
+  EXPECT_NEAR(streamed[3], 0.5f, 1e-6f);
+  EXPECT_EQ(stats.samples, streamed.size());
+  EXPECT_NEAR(stats.duration_sec, 4.0f / 16000.0f, 1e-6f);
 }
 
 TEST(Audio, Base64DecodeIntoReuseBuffer) {

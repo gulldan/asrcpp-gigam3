@@ -14,3 +14,9 @@ wheels/
 cmake_test_discovery*
 dhat.out.txt
 node_modules
+.DS_Store
+cmake_test_discovery*
+Testing
+tsan_suppressions.txt
+uploads
+default.pr*

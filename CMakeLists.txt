@@ -1,19 +1,86 @@
 cmake_minimum_required(VERSION 3.24...4.2)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
+if(APPLE AND (NOT DEFINED CMAKE_OSX_SYSROOT OR CMAKE_OSX_SYSROOT STREQUAL ""))
+    execute_process(
+        COMMAND xcrun --show-sdk-path
+        OUTPUT_VARIABLE ASR_MACOS_SDK
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NOT ASR_MACOS_SDK)
+        set(ASR_MACOS_SDK "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
+    endif()
+    if(ASR_MACOS_SDK AND EXISTS "${ASR_MACOS_SDK}")
+        set(CMAKE_OSX_SYSROOT "${ASR_MACOS_SDK}" CACHE PATH
+            "macOS SDK used for compiler and dependency discovery" FORCE)
+        set(ENV{SDKROOT} "${CMAKE_OSX_SYSROOT}")
+    endif()
+endif()
+
 project(asr-server VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS 1 CACHE INTERNAL
+    "Suppress developer warnings from vendored dependencies" FORCE)
+set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL
+    "Suppress deprecated CMake warnings from vendored dependencies" FORCE)
+
+set(ASR_SANITIZER_BUILD OFF)
+foreach(_asr_flag_var IN ITEMS
+        CMAKE_C_FLAGS
+        CMAKE_CXX_FLAGS
+        CMAKE_EXE_LINKER_FLAGS
+        CMAKE_SHARED_LINKER_FLAGS)
+    if(DEFINED ${_asr_flag_var} AND "${${_asr_flag_var}}" MATCHES "(^| )-fsanitize=")
+        set(ASR_SANITIZER_BUILD ON)
+    endif()
+endforeach()
+
+# libsamplerate probes clipping behavior with try_run(). On macOS sanitizer
+# builds those probes can hang inside the temporary executable, blocking the
+# whole configure step for ASan/TSan presets.
+if(APPLE AND ASR_SANITIZER_BUILD)
+    set(CPU_CLIPS_POSITIVE FALSE CACHE BOOL
+        "Target processor clips on positive float to int conversion" FORCE)
+    set(CPU_CLIPS_NEGATIVE FALSE CACHE BOOL
+        "Target processor clips on negative float to int conversion" FORCE)
+    set(CXX_FILESYSTEM_NO_LINK_NEEDED TRUE CACHE BOOL
+        "Sanitizer runtime can execute std::filesystem without extra link flags"
+        FORCE)
+endif()
 
 # Coverage option
 option(ASR_ENABLE_COVERAGE "Enable code coverage" OFF)
 if(ASR_ENABLE_COVERAGE)
-    add_compile_options(--coverage -fprofile-arcs -ftest-coverage)
-    add_link_options(--coverage)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
+        add_link_options(-fprofile-instr-generate -fcoverage-mapping)
+    else()
+        add_compile_options(--coverage -fprofile-arcs -ftest-coverage)
+        add_link_options(--coverage)
+    endif()
 endif()
+
+function(asr_suppress_external_warnings target_name)
+    if(TARGET "${target_name}")
+        target_compile_options("${target_name}" PRIVATE
+            -Wno-cast-align
+            -Wno-deprecated-declarations
+            -Wno-shadow
+            -Wno-unused-parameter
+        )
+    endif()
+endfunction()
+
+function(asr_mark_external_target_system target_name)
+    if(TARGET "${target_name}")
+        set_property(TARGET "${target_name}" PROPERTY SYSTEM ON)
+    endif()
+endfunction()
 
 # ---------------------------------------------------------------------------
 # FetchContent for all dependencies
@@ -81,6 +148,10 @@ FetchContent_Declare(drogon
 # Make core FetchContent targets available.
 # nlohmann_json is made available later only if sherpa-onnx didn't create it.
 FetchContent_MakeAvailable(spdlog prometheus-cpp libsamplerate drogon)
+foreach(_asr_external_target IN ITEMS spdlog civetweb core pull samplerate trantor drogon)
+    asr_suppress_external_warnings(${_asr_external_target})
+    asr_mark_external_target_system(${_asr_external_target})
+endforeach()
 
 # 6. onnxruntime (prebuilt binaries — not a CMake project, download manually)
 option(ASR_ENABLE_CUDA "Enable GPU onnxruntime" OFF)
@@ -206,6 +277,21 @@ FetchContent_Declare(sherpa_onnx
     GIT_TAG        ${SHERPA_ONNX_GIT_TAG}
 )
 FetchContent_MakeAvailable(sherpa_onnx)
+foreach(_asr_external_target IN ITEMS
+    kissfft
+    ssentencepiece_core
+    fst
+    fstfar
+    kaldi-native-fbank-core
+    kaldifst_core
+    kaldi-decoder-core
+    sherpa-onnx-core
+    sherpa-onnx-c-api
+    sherpa-onnx-cxx-api
+)
+    asr_suppress_external_warnings(${_asr_external_target})
+    asr_mark_external_target_system(${_asr_external_target})
+endforeach()
 
 # sherpa-onnx >= v1.12.28 fetches nlohmann/json internally.
 # Keep backward compatibility with older sherpa-onnx versions that may not.
@@ -248,6 +334,7 @@ add_library(asr_core STATIC
     src/audio/resampler.cpp
     src/audio/realtime_opus.cpp
     src/audio/decode.cpp
+    src/executor.cpp
     src/vad.cpp
     src/recognizer.cpp
     src/handler.cpp

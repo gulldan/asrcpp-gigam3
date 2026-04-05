@@ -18,7 +18,7 @@ class Server {
 
  private:
   void        setup_http_handlers();
-  static void setup_ws_handler();
+  static void setup_realtime_ws_handler();
   static void install_signal_handlers();
 
   const Config& config_;

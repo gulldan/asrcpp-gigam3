@@ -106,13 +106,13 @@ TEST(Integration, StreamingSimulation) {
   auto       cfg     = make_config();
   auto       vad_cfg = make_vad_config(cfg);
   Recognizer rec(cfg);
-  ASRSession session(rec, vad_cfg, cfg);
+  ASRSession session(rec, vad_cfg, cfg, "realtime_websocket");
 
   // Decode test WAV
   auto wav_data = read_file(kTestWav);
   auto audio    = decode_wav(wav_data, cfg.sample_rate);
 
-  // Feed in chunks (simulating WebSocket streaming)
+  // Feed in chunks simulating realtime streaming.
   constexpr size_t kChunkSize = 4096;  // ~256ms at 16kHz
   bool             got_final  = false;
 

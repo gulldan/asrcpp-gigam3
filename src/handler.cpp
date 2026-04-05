@@ -1,69 +1,33 @@
 #include "asr/handler.h"
 
+#include <math.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdio>
 #include <iterator>
+#include <ratio>
+#include <utility>
 
 #include "asr/audio.h"
 #include "asr/config.h"
+#include "asr/json_utils.h"
 #include "asr/metrics.h"
 #include "asr/recognizer.h"
 #include "asr/span.h"
 
 namespace asr {
 
-namespace {
-
-// Escape a string for JSON output, appending directly to `out`.
-// Handles all mandatory JSON escapes (RFC 8259 §7).
-void json_escape_to(std::string& out, const std::string& s) {
-  out.reserve(out.size() + s.size());
-  for (const char c : s) {
-    switch (c) {
-      case '"':
-        out.append("\\\"", 2);
-        break;
-      case '\\':
-        out.append("\\\\", 2);
-        break;
-      case '\b':
-        out.append("\\b", 2);
-        break;
-      case '\f':
-        out.append("\\f", 2);
-        break;
-      case '\n':
-        out.append("\\n", 2);
-        break;
-      case '\r':
-        out.append("\\r", 2);
-        break;
-      case '\t':
-        out.append("\\t", 2);
-        break;
-      default:
-        if (static_cast<unsigned char>(c) < 0x20) {
-          char buf[7];
-          // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
-          std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(c)));
-          out.append(buf);
-        } else {
-          out += c;
-        }
-        break;
-    }
-  }
-}
-
-}  // namespace
-
-ASRSession::ASRSession(Recognizer& recognizer, const VadConfig& vad_config, const Config& config)
-    : recognizer_(recognizer), vad_(vad_config), config_(config) {
+ASRSession::ASRSession(Recognizer& recognizer, const VadConfig& vad_config, const Config& config,
+                       std::string metrics_mode)
+    : recognizer_(recognizer), vad_(vad_config), config_(config), metrics_mode_(std::move(metrics_mode)) {
   pending_.reserve(static_cast<size_t>(vad_config.window_size));
+  if (config_.live_flush_interval_sec > 0.0f) {
+    const auto live_reserve = static_cast<size_t>(std::max(1.0f, config_.live_flush_interval_sec) *
+                                                  static_cast<float>(config_.sample_rate));
+    live_chunk_.reserve(live_reserve);
+  }
   out_messages_.reserve(4);
   reset_session();
 }
@@ -74,6 +38,7 @@ ASRSession::OutMessage& ASRSession::next_message() {
   if (out_size_ >= out_messages_.size()) {
     out_messages_.emplace_back();
     out_messages_.back().json.reserve(128);
+    out_messages_.back().text.reserve(128);
   }
   return out_messages_[out_size_++];
 }
@@ -86,6 +51,7 @@ void ASRSession::write_interim(float duration, float rms, bool is_speech) {
   auto& msg = next_message();
   msg.type  = OutMessage::Interim;
   msg.json.clear();
+  msg.text.clear();
   fmt::format_to(std::back_inserter(msg.json),
                  R"({{"type":"interim","duration":{:.1f},"rms":{:.4f},"is_speech":{}}})",
                  std::round(duration * 10.0f) / 10.0f, std::round(rms * 10000.0f) / 10000.0f,
@@ -96,8 +62,9 @@ void ASRSession::write_final(const std::string& text, float duration) {
   auto& msg = next_message();
   msg.type  = OutMessage::Final;
   msg.json.clear();
+  msg.text.assign(text);
   msg.json.append(R"({"type":"final","text":")");
-  json_escape_to(msg.json, text);
+  append_json_escaped(msg.json, text);
   fmt::format_to(std::back_inserter(msg.json), R"(","duration":{:.3f}}})",
                  std::round(duration * 1000.0f) / 1000.0f);
 }
@@ -106,6 +73,7 @@ void ASRSession::write_done() {
   auto& msg = next_message();
   msg.type  = OutMessage::Done;
   msg.json.clear();
+  msg.text.clear();
   msg.json.append(R"({"type":"done"})");
 }
 
@@ -155,7 +123,7 @@ void ASRSession::process_vad_segments() {
       first_result_ts_  = SteadyClock::now();
       has_first_result_ = true;
       const double ttfr = std::chrono::duration<double>(first_result_ts_ - start_ts_).count();
-      ASRMetrics::instance().observe_ttfr(ttfr, "websocket");
+      ASRMetrics::instance().observe_ttfr(ttfr, metrics_mode_);
     }
 
     // Metrics
@@ -168,8 +136,8 @@ void ASRSession::process_vad_segments() {
     } else {
       segments_++;
       ASRMetrics::instance().record_result(text);
-      spdlog::info("ASR session #{}: final segment {:.3f}s text_len={}", session_seq_, audio_sec,
-                   text.size());
+      spdlog::debug("ASR session #{}: final segment {:.3f}s text_len={}", session_seq_, audio_sec,
+                    text.size());
       write_final(text, audio_sec);
     }
 
@@ -178,12 +146,8 @@ void ASRSession::process_vad_segments() {
 }
 
 bool ASRSession::has_final_messages() const {
-  for (size_t i = 0; i < out_size_; ++i) {
-    if (out_messages_[i].type == OutMessage::Final) {
-      return true;
-    }
-  }
-  return false;
+  return std::any_of(out_messages_.begin(), out_messages_.begin() + static_cast<std::ptrdiff_t>(out_size_),
+                     [](const OutMessage& message) { return message.type == OutMessage::Final; });
 }
 
 void ASRSession::process_live_chunk_fallback() {
@@ -196,7 +160,7 @@ void ASRSession::process_live_chunk_fallback() {
 
   const float fallback_rms = compute_rms(live_chunk_);
   if (fallback_rms < config_.silence_threshold) {
-    spdlog::info(
+    spdlog::debug(
         "ASR session #{}: live fallback skipped (duration={:.2f}s rms={:.5f} < silence_threshold={:.5f})",
         session_seq_, static_cast<double>(live_chunk_.size()) / static_cast<double>(config_.sample_rate),
         fallback_rms, config_.silence_threshold);
@@ -217,7 +181,7 @@ void ASRSession::process_live_chunk_fallback() {
     first_result_ts_  = SteadyClock::now();
     has_first_result_ = true;
     const double ttfr = std::chrono::duration<double>(first_result_ts_ - start_ts_).count();
-    ASRMetrics::instance().observe_ttfr(ttfr, "websocket");
+    ASRMetrics::instance().observe_ttfr(ttfr, metrics_mode_);
   }
 
   ASRMetrics::instance().observe_segment(static_cast<double>(audio_sec), decode_sec);
@@ -225,13 +189,13 @@ void ASRSession::process_live_chunk_fallback() {
   if (text.empty()) {
     ++silence_segments_;
     ASRMetrics::instance().record_silence();
-    spdlog::info("ASR session #{}: live fallback produced empty result (duration={:.2f}s rms={:.5f})",
-                 session_seq_, audio_sec, fallback_rms);
+    spdlog::debug("ASR session #{}: live fallback produced empty result (duration={:.2f}s rms={:.5f})",
+                  session_seq_, audio_sec, fallback_rms);
   } else {
     ++segments_;
     ASRMetrics::instance().record_result(text);
-    spdlog::info("ASR session #{}: live fallback final {:.3f}s text_len={} rms={:.5f}", session_seq_,
-                 audio_sec, text.size(), fallback_rms);
+    spdlog::debug("ASR session #{}: live fallback final {:.3f}s text_len={} rms={:.5f}", session_seq_,
+                  audio_sec, text.size(), fallback_rms);
     write_final(text, audio_sec);
   }
 
@@ -262,7 +226,7 @@ void ASRSession::finalize_session(const char* reason) {
       session_seq_, reason, total_sec, audio_sec, chunks_, bytes_, segments_, silence_segments_);
 
   ASRMetrics::instance().observe_request(total_sec, audio_sec, decode_sec_, chunks_, bytes_, preprocess_sec_,
-                                         0.0, "websocket", "success");
+                                         0.0, metrics_mode_, "success");
 
   // Speech ratio
   const int total_segments = segments_ + silence_segments_;
@@ -303,7 +267,7 @@ span<const ASRSession::OutMessage> ASRSession::on_audio(span<const float> sample
   if (!session_active_) {
     session_active_ = true;
     ASRMetrics::instance().session_started();
-    spdlog::info("ASR session #{}: started", session_seq_);
+    spdlog::debug("ASR session #{}: started", session_seq_);
   }
 
   chunks_++;
@@ -352,7 +316,7 @@ span<const ASRSession::OutMessage> ASRSession::on_audio(span<const float> sample
       const double since_last_flush_sec =
           static_cast<double>(total_samples_received_ - last_live_flush_samples_) /
           static_cast<double>(config_.sample_rate);
-      spdlog::info(
+      spdlog::debug(
           "ASR session #{}: periodic live flush total_input_sec={:.2f} since_last_flush_sec={:.2f} "
           "pending_samples={} in_speech={}",
           session_seq_, total_input_sec, since_last_flush_sec, pending_.size(),
@@ -395,14 +359,14 @@ span<const ASRSession::OutMessage> ASRSession::on_audio(span<const float> sample
 
 span<const ASRSession::OutMessage> ASRSession::on_recognize() {
   begin_messages();
-  spdlog::info("ASR session #{}: RECOGNIZE received (session_active={} max_duration_exceeded={})",
-               session_seq_, session_active_ ? "true" : "false", max_duration_exceeded_ ? "true" : "false");
+  spdlog::debug("ASR session #{}: RECOGNIZE received (session_active={} max_duration_exceeded={})",
+                session_seq_, session_active_ ? "true" : "false", max_duration_exceeded_ ? "true" : "false");
 
   // If auto-finalize already fired (max_audio_sec), don't finalize again —
   // done message and metrics were already recorded.
   if (max_duration_exceeded_) {
-    spdlog::info("ASR session #{}: skipping duplicate finalize after max_audio_sec auto-finalize",
-                 session_seq_);
+    spdlog::debug("ASR session #{}: skipping duplicate finalize after max_audio_sec auto-finalize",
+                  session_seq_);
     max_duration_exceeded_ = false;
     return current_messages();
   }
@@ -419,8 +383,8 @@ span<const ASRSession::OutMessage> ASRSession::on_recognize() {
 }
 
 void ASRSession::on_reset() {
-  spdlog::info("ASR session #{}: RESET received (chunks={} bytes={} samples={})", session_seq_, chunks_,
-               bytes_, total_samples_received_);
+  spdlog::debug("ASR session #{}: RESET received (chunks={} bytes={} samples={})", session_seq_, chunks_,
+                bytes_, total_samples_received_);
   max_duration_exceeded_ = false;
   if (session_active_) {
     ASRMetrics::instance().session_ended(0.0);
@@ -434,6 +398,18 @@ void ASRSession::on_reset() {
 
 bool ASRSession::is_speech() const {
   return vad_.is_speech();
+}
+
+bool ASRSession::has_speech_transition() const {
+  return vad_.has_transition();
+}
+
+const ASRSession::SpeechTransition& ASRSession::front_speech_transition() const {
+  return vad_.front_transition();
+}
+
+void ASRSession::pop_speech_transition() {
+  vad_.pop_transition();
 }
 
 void ASRSession::on_close() {

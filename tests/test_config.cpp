@@ -47,6 +47,7 @@ TEST(Config, DefaultValues) {
   EXPECT_FLOAT_EQ(cfg.live_flush_interval_sec, 6.0f);
   EXPECT_EQ(cfg.model_dir, "models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16");
   EXPECT_EQ(cfg.vad_model, "models/silero_vad.onnx");
+  EXPECT_EQ(cfg.max_ws_connections, static_cast<size_t>(0));
 }
 
 TEST(Config, FromEnvOverrides) {
@@ -57,14 +58,13 @@ TEST(Config, FromEnvOverrides) {
   const ScopedEnv e5("VAD_THRESHOLD", "0.7");
   const ScopedEnv e6("SILENCE_THRESHOLD", "0.01");
   const ScopedEnv e7("MIN_AUDIO_SEC", "1.0");
-  const ScopedEnv e8("MAX_AUDIO_SEC", "60.0");
-  const ScopedEnv e9("VAD_MIN_SILENCE", "0.3");
-  const ScopedEnv e10("VAD_MIN_SPEECH", "0.1");
-  const ScopedEnv e11("VAD_MAX_SPEECH", "15.0");
-  const ScopedEnv e12("MODEL_DIR", "/custom/model");
-  const ScopedEnv e13("VAD_MODEL", "/custom/vad.onnx");
-  const ScopedEnv e14("IDLE_CONNECTION_TIMEOUT_SEC", "120");
-  const ScopedEnv e15("LIVE_FLUSH_INTERVAL_SEC", "3.5");
+  const ScopedEnv e8("VAD_MIN_SILENCE", "0.3");
+  const ScopedEnv e9("VAD_MIN_SPEECH", "0.1");
+  const ScopedEnv e10("VAD_MAX_SPEECH", "15.0");
+  const ScopedEnv e11("MODEL_DIR", "/custom/model");
+  const ScopedEnv e12("VAD_MODEL", "/custom/vad.onnx");
+  const ScopedEnv e13("IDLE_CONNECTION_TIMEOUT_SEC", "120");
+  const ScopedEnv e14("MAX_WS_CONNECTIONS", "64");
 
   auto cfg = Config::from_env();
   EXPECT_EQ(cfg.host, "127.0.0.1");
@@ -74,14 +74,13 @@ TEST(Config, FromEnvOverrides) {
   EXPECT_FLOAT_EQ(cfg.vad_threshold, 0.7f);
   EXPECT_FLOAT_EQ(cfg.silence_threshold, 0.01f);
   EXPECT_FLOAT_EQ(cfg.min_audio_sec, 1.0f);
-  EXPECT_FLOAT_EQ(cfg.max_audio_sec, 60.0f);
   EXPECT_FLOAT_EQ(cfg.vad_min_silence, 0.3f);
   EXPECT_FLOAT_EQ(cfg.vad_min_speech, 0.1f);
   EXPECT_FLOAT_EQ(cfg.vad_max_speech, 15.0f);
   EXPECT_EQ(cfg.model_dir, "/custom/model");
   EXPECT_EQ(cfg.vad_model, "/custom/vad.onnx");
   EXPECT_EQ(cfg.idle_connection_timeout_sec, static_cast<size_t>(120));
-  EXPECT_FLOAT_EQ(cfg.live_flush_interval_sec, 3.5f);
+  EXPECT_EQ(cfg.max_ws_connections, static_cast<size_t>(64));
 }
 
 TEST(Config, MissingEnvUsesDefaults) {
@@ -243,15 +242,21 @@ TEST(Config, DefaultPoolValues) {
   const Config cfg;
   EXPECT_EQ(cfg.recognizer_pool_size, 1);
   EXPECT_EQ(cfg.max_concurrent_requests, static_cast<size_t>(0));
+  EXPECT_EQ(cfg.recognizer_wait_timeout_ms, static_cast<size_t>(30000));
+  EXPECT_EQ(cfg.max_ws_connections, static_cast<size_t>(0));
 }
 
 TEST(Config, FromEnvPoolOverrides) {
   const ScopedEnv e1("RECOGNIZER_POOL_SIZE", "4");
   const ScopedEnv e2("MAX_CONCURRENT_REQUESTS", "16");
+  const ScopedEnv e3("RECOGNIZER_WAIT_TIMEOUT_MS", "1234");
+  const ScopedEnv e4("MAX_WS_CONNECTIONS", "32");
 
   auto cfg = Config::from_env();
   EXPECT_EQ(cfg.recognizer_pool_size, 4);
   EXPECT_EQ(cfg.max_concurrent_requests, static_cast<size_t>(16));
+  EXPECT_EQ(cfg.recognizer_wait_timeout_ms, static_cast<size_t>(1234));
+  EXPECT_EQ(cfg.max_ws_connections, static_cast<size_t>(32));
 }
 
 TEST(ConfigValidation, PoolSizeAutoDefault) {
@@ -263,9 +268,17 @@ TEST(ConfigValidation, PoolSizeAutoDefault) {
 
 TEST(ConfigValidation, MaxConcurrentAutoDefault) {
   Config cfg;
+  cfg.recognizer_pool_size    = 3;
   cfg.max_concurrent_requests = 0;
   cfg.validate();
-  EXPECT_EQ(cfg.max_concurrent_requests, cfg.threads * 2);
+  EXPECT_EQ(cfg.max_concurrent_requests, static_cast<size_t>(cfg.recognizer_pool_size));
+}
+
+TEST(ConfigValidation, RecognizerWaitTimeoutZeroUsesDefault) {
+  Config cfg;
+  cfg.recognizer_wait_timeout_ms = 0;
+  cfg.validate();
+  EXPECT_EQ(cfg.recognizer_wait_timeout_ms, static_cast<size_t>(30000));
 }
 
 TEST(ConfigValidation, ClampsPoolSize) {

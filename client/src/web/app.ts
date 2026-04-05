@@ -1,7 +1,16 @@
 // Main entry point: wires all modules together
 
 import { REALTIME_WS_URL } from './types';
-import { dom, initTabs, setStatus, addResult, setMicUI, setMicDeviceNote } from './ui';
+import {
+  clearResults,
+  dom,
+  initTabs,
+  setStatus,
+  addResult,
+  setMicUI,
+  setMicDeviceNote,
+  setSelectedDeviceLabel,
+} from './ui';
 import { rtLog, errorMessage } from './logger';
 import { getDebugState } from './logger';
 import { RealtimeClient } from './realtime';
@@ -36,7 +45,7 @@ function ensureMicEnvironment() {
   if (isLoopback) return;
 
   throw new Error(
-    'Микрофон в браузере работает только на HTTPS или localhost. Откройте страницу через https://<ваш-домен> или http://localhost:8081.'
+    'Микрофон в браузере работает только на HTTPS или localhost. Откройте страницу через https://<ваш-домен> или http://localhost:8081.',
   );
 }
 
@@ -83,6 +92,7 @@ function renderMicDeviceList(devices: MediaDeviceInfo[]) {
     selectedMicDeviceId = '';
     selectedMicDeviceLabel = '';
     setStoredMicDeviceId('');
+    setSelectedDeviceLabel('');
     setMicDeviceNote('Аудио-входы не найдены в браузере.');
     return;
   }
@@ -106,6 +116,7 @@ function renderMicDeviceList(devices: MediaDeviceInfo[]) {
   const selectedIdx = devices.findIndex((d) => d.deviceId === selectedMicDeviceId);
   const idx = selectedIdx >= 0 ? selectedIdx : 0;
   selectedMicDeviceLabel = safeDeviceLabel(devices[idx], idx);
+  setSelectedDeviceLabel(selectedMicDeviceLabel);
   setMicDeviceNote(`Текущее устройство: ${selectedMicDeviceLabel}`);
 }
 
@@ -151,7 +162,7 @@ function onAudioProblem(problem: AudioProblem) {
     setMicDeviceNote('Сигнал не идет. Выберите другой источник в списке выше.');
   }
   setMicUI(true, problem.message);
-  addResult(`[Диагностика] ${problem.message}`);
+  addResult(problem.message, null, 'Система', 'diagnostic');
 }
 
 function onAudioStats(stats: AudioSignalStats) {
@@ -217,7 +228,7 @@ function ensureRealtimeClient(): RealtimeClient {
     const trimmed = text.trim();
     if (!trimmed) return;
     rtLog('ui_transcript_added', { text_len: trimmed.length });
-    addResult(trimmed);
+    addResult(trimmed, null, 'Микрофон');
   };
 
   realtimeClient.onSpeechState = (active) => {
@@ -390,6 +401,8 @@ export function init() {
   initFileUpload();
   visualizer = new Visualizer(dom.canvas);
   selectedMicDeviceId = getStoredMicDeviceId();
+  setStatus('disconnected');
+  setSelectedDeviceLabel('Автовыбор');
   refreshMicDevices();
 
   dom.micDeviceSelect.addEventListener('change', () => {
@@ -398,8 +411,9 @@ export function init() {
     const selectedIdx = knownMicDevices.findIndex((d) => d.deviceId === selectedMicDeviceId);
     selectedMicDeviceLabel =
       selectedIdx >= 0 ? safeDeviceLabel(knownMicDevices[selectedIdx], selectedIdx) : '';
+    setSelectedDeviceLabel(selectedMicDeviceLabel);
     setMicDeviceNote(
-      selectedMicDeviceLabel ? `Текущее устройство: ${selectedMicDeviceLabel}` : 'Устройство не выбрано.'
+      selectedMicDeviceLabel ? `Текущее устройство: ${selectedMicDeviceLabel}` : 'Устройство не выбрано.',
     );
     rtLog('mic_device_selected', {
       selected_device_id: selectedMicDeviceId,
@@ -425,6 +439,10 @@ export function init() {
     } else {
       startRecording();
     }
+  });
+
+  dom.clearResultsBtn.addEventListener('click', () => {
+    clearResults();
   });
 
   document.addEventListener('visibilitychange', () => {

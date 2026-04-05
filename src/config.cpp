@@ -70,26 +70,26 @@ Config Config::from_env() {
   cfg.threads = get_env_size("THREADS", cfg.threads);
   cfg.idle_connection_timeout_sec =
       get_env_size("IDLE_CONNECTION_TIMEOUT_SEC", cfg.idle_connection_timeout_sec);
-  cfg.model_dir               = get_env("MODEL_DIR", cfg.model_dir);
-  cfg.vad_model               = get_env("VAD_MODEL", cfg.vad_model);
-  cfg.provider                = get_env("PROVIDER", cfg.provider);
-  cfg.num_threads             = get_env_int("NUM_THREADS", cfg.num_threads);
-  cfg.sample_rate             = get_env_int("SAMPLE_RATE", cfg.sample_rate);
-  cfg.feature_dim             = get_env_int("FEATURE_DIM", cfg.feature_dim);
-  cfg.vad_threshold           = get_env_float("VAD_THRESHOLD", cfg.vad_threshold);
-  cfg.vad_min_silence         = get_env_float("VAD_MIN_SILENCE", cfg.vad_min_silence);
-  cfg.vad_min_speech          = get_env_float("VAD_MIN_SPEECH", cfg.vad_min_speech);
-  cfg.vad_max_speech          = get_env_float("VAD_MAX_SPEECH", cfg.vad_max_speech);
-  cfg.vad_window_size         = get_env_int("VAD_WINDOW_SIZE", cfg.vad_window_size);
-  cfg.vad_context_size        = get_env_int("VAD_CONTEXT_SIZE", cfg.vad_context_size);
-  cfg.silence_threshold       = get_env_float("SILENCE_THRESHOLD", cfg.silence_threshold);
-  cfg.min_audio_sec           = get_env_float("MIN_AUDIO_SEC", cfg.min_audio_sec);
-  cfg.max_audio_sec           = get_env_float("MAX_AUDIO_SEC", cfg.max_audio_sec);
-  cfg.live_flush_interval_sec = get_env_float("LIVE_FLUSH_INTERVAL_SEC", cfg.live_flush_interval_sec);
-  cfg.max_upload_bytes        = get_env_size("MAX_UPLOAD_BYTES", cfg.max_upload_bytes);
-  cfg.max_ws_message_bytes    = get_env_size("MAX_WS_MESSAGE_BYTES", cfg.max_ws_message_bytes);
-  cfg.recognizer_pool_size    = get_env_int("RECOGNIZER_POOL_SIZE", cfg.recognizer_pool_size);
-  cfg.max_concurrent_requests = get_env_size("MAX_CONCURRENT_REQUESTS", cfg.max_concurrent_requests);
+  cfg.model_dir                  = get_env("MODEL_DIR", cfg.model_dir);
+  cfg.vad_model                  = get_env("VAD_MODEL", cfg.vad_model);
+  cfg.provider                   = get_env("PROVIDER", cfg.provider);
+  cfg.num_threads                = get_env_int("NUM_THREADS", cfg.num_threads);
+  cfg.sample_rate                = get_env_int("SAMPLE_RATE", cfg.sample_rate);
+  cfg.feature_dim                = get_env_int("FEATURE_DIM", cfg.feature_dim);
+  cfg.vad_threshold              = get_env_float("VAD_THRESHOLD", cfg.vad_threshold);
+  cfg.vad_min_silence            = get_env_float("VAD_MIN_SILENCE", cfg.vad_min_silence);
+  cfg.vad_min_speech             = get_env_float("VAD_MIN_SPEECH", cfg.vad_min_speech);
+  cfg.vad_max_speech             = get_env_float("VAD_MAX_SPEECH", cfg.vad_max_speech);
+  cfg.vad_window_size            = get_env_int("VAD_WINDOW_SIZE", cfg.vad_window_size);
+  cfg.vad_context_size           = get_env_int("VAD_CONTEXT_SIZE", cfg.vad_context_size);
+  cfg.silence_threshold          = get_env_float("SILENCE_THRESHOLD", cfg.silence_threshold);
+  cfg.min_audio_sec              = get_env_float("MIN_AUDIO_SEC", cfg.min_audio_sec);
+  cfg.max_upload_bytes           = get_env_size("MAX_UPLOAD_BYTES", cfg.max_upload_bytes);
+  cfg.max_ws_message_bytes       = get_env_size("MAX_WS_MESSAGE_BYTES", cfg.max_ws_message_bytes);
+  cfg.recognizer_pool_size       = get_env_int("RECOGNIZER_POOL_SIZE", cfg.recognizer_pool_size);
+  cfg.max_concurrent_requests    = get_env_size("MAX_CONCURRENT_REQUESTS", cfg.max_concurrent_requests);
+  cfg.recognizer_wait_timeout_ms = get_env_size("RECOGNIZER_WAIT_TIMEOUT_MS", cfg.recognizer_wait_timeout_ms);
+  cfg.max_ws_connections         = get_env_size("MAX_WS_CONNECTIONS", cfg.max_ws_connections);
   return cfg;
 }
 
@@ -143,7 +143,7 @@ void Config::validate() {
     live_flush_interval_sec = 0.2f;
   }
 
-  // 0 disables the session duration limit for WebSocket live mode.
+  // 0 disables the internal session duration limit.
   if (max_audio_sec < 0.0f) {
     spdlog::warn("Clamping max_audio_sec {} to 0 (unlimited)", max_audio_sec);
     max_audio_sec = 0.0f;
@@ -177,9 +177,14 @@ void Config::validate() {
     recognizer_pool_size = std::clamp(recognizer_pool_size, 1, 256);
   }
 
-  // Max concurrent requests: 0 = auto (= threads * 2)
+  if (recognizer_wait_timeout_ms == 0) {
+    spdlog::warn("recognizer_wait_timeout_ms must be positive, using default 30000");
+    recognizer_wait_timeout_ms = 30000;
+  }
+
+  // Max concurrent requests: 0 = auto (= recognizer_pool_size)
   if (max_concurrent_requests == 0) {
-    max_concurrent_requests = threads * 2;
+    max_concurrent_requests = static_cast<size_t>(recognizer_pool_size);
   }
 
   // Cross-validation: VAD durations

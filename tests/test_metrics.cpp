@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "asr/metrics.h"
 
@@ -22,8 +23,9 @@ TEST_F(MetricsTest, Initialization) {
 }
 
 TEST_F(MetricsTest, ObserveTTFR) {
-  EXPECT_NO_THROW(ASRMetrics::instance().observe_ttfr(0.5, "websocket"));
+  EXPECT_NO_THROW(ASRMetrics::instance().observe_ttfr(0.4, "realtime_websocket"));
   EXPECT_NO_THROW(ASRMetrics::instance().observe_ttfr(0.3, "http"));
+  EXPECT_NO_THROW(ASRMetrics::instance().observe_ttfr(0.2, "whisper_api"));
 }
 
 TEST_F(MetricsTest, ObserveSegment) {
@@ -67,12 +69,19 @@ TEST_F(MetricsTest, SetSpeechRatio) {
 }
 
 TEST_F(MetricsTest, ObserveRequest) {
+  EXPECT_NO_THROW(ASRMetrics::instance().observe_request(1.0, 1.5, 0.4, 10, 32000, 0.02, 0.0,
+                                                         "realtime_websocket", "success"));
   EXPECT_NO_THROW(
-      ASRMetrics::instance().observe_request(2.0, 3.0, 0.8, 100, 160000, 0.05, 0.01, "websocket", "success"));
+      ASRMetrics::instance().observe_request(1.5, 2.0, 0.5, 12, 64000, 0.03, 0.0, "whisper_api", "failed"));
+}
+
+TEST_F(MetricsTest, ObserveRecognizerWait) {
+  EXPECT_NO_THROW(ASRMetrics::instance().observe_recognizer_wait(0.012, false));
+  EXPECT_NO_THROW(ASRMetrics::instance().observe_recognizer_wait(0.250, true));
 }
 
 TEST_F(MetricsTest, PrometheusSerialize) {
-  ASRMetrics::instance().observe_ttfr(0.5, "websocket");
+  ASRMetrics::instance().observe_ttfr(0.5, "http");
   ASRMetrics::instance().observe_segment(2.0, 0.3);
   ASRMetrics::instance().connection_opened();
 
@@ -92,10 +101,15 @@ static std::string serialize_metrics() {
 
 TEST_F(MetricsTest, AllPipelineMetricsRegistered) {
   // Trigger some metrics so families with labels get created
-  ASRMetrics::instance().observe_ttfr(0.1, "websocket");
+  ASRMetrics::instance().observe_ttfr(0.1, "realtime_websocket");
   ASRMetrics::instance().observe_ttfr(0.1, "http");
+  ASRMetrics::instance().observe_ttfr(0.1, "whisper_api");
   ASRMetrics::instance().observe_segment(1.0, 0.1);
-  ASRMetrics::instance().observe_request(1.0, 2.0, 0.5, 10, 16000, 0.01, 0.0, "websocket", "success");
+  ASRMetrics::instance().observe_request(1.0, 2.0, 0.5, 10, 16000, 0.01, 0.0, "http", "success");
+  ASRMetrics::instance().observe_request(1.0, 2.0, 0.5, 10, 16000, 0.01, 0.0, "realtime_websocket",
+                                         "success");
+  ASRMetrics::instance().observe_request(1.0, 2.0, 0.5, 10, 16000, 0.01, 0.0, "whisper_api", "failed");
+  ASRMetrics::instance().observe_recognizer_wait(0.05, true);
   ASRMetrics::instance().observe_error("test");
 
   auto text = serialize_metrics();
@@ -106,8 +120,13 @@ TEST_F(MetricsTest, AllPipelineMetricsRegistered) {
   EXPECT_NE(text.find("gigaam_audio_duration_seconds"), std::string::npos);
   EXPECT_NE(text.find("gigaam_segments_total"), std::string::npos);
   EXPECT_NE(text.find("gigaam_requests_total"), std::string::npos);
+  EXPECT_NE(text.find("gigaam_recognizer_wait_seconds"), std::string::npos);
+  EXPECT_NE(text.find("gigaam_recognizer_wait_timeouts_total"), std::string::npos);
   EXPECT_NE(text.find("gigaam_errors_total"), std::string::npos);
   EXPECT_NE(text.find("gigaam_active_connections"), std::string::npos);
+  EXPECT_NE(text.find("mode=\"realtime_websocket\""), std::string::npos);
+  EXPECT_NE(text.find("mode=\"http\""), std::string::npos);
+  EXPECT_NE(text.find("mode=\"whisper_api\""), std::string::npos);
 }
 
 TEST_F(MetricsTest, AllConnectionMetricsRegistered) {

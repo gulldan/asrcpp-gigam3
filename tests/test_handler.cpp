@@ -62,7 +62,7 @@ TEST(Handler, OnAudioInterim) {
   auto       cfg     = make_test_config();
   auto       vad_cfg = make_vad_config(cfg);
   Recognizer rec(cfg);
-  ASRSession session(rec, vad_cfg, cfg);
+  ASRSession session(rec, vad_cfg, cfg, "realtime_websocket");
 
   // Send small silent chunk - should get interim
   std::vector<float> silence(1024, 0.0f);
@@ -87,7 +87,7 @@ TEST(Handler, OnRecognizeFlush) {
   auto       cfg     = make_test_config();
   auto       vad_cfg = make_vad_config(cfg);
   Recognizer rec(cfg);
-  ASRSession session(rec, vad_cfg, cfg);
+  ASRSession session(rec, vad_cfg, cfg, "realtime_websocket");
 
   // Send some audio then recognize
   std::vector<float> silence(4096, 0.0f);
@@ -108,7 +108,7 @@ TEST(Handler, OnReset) {
   auto       cfg     = make_test_config();
   auto       vad_cfg = make_vad_config(cfg);
   Recognizer rec(cfg);
-  ASRSession session(rec, vad_cfg, cfg);
+  ASRSession session(rec, vad_cfg, cfg, "realtime_websocket");
 
   std::vector<float> audio(2048, 0.0f);
   session.on_audio(audio);
@@ -128,7 +128,7 @@ TEST(Handler, MultipleSessionsOnConnection) {
   auto       cfg     = make_test_config();
   auto       vad_cfg = make_vad_config(cfg);
   Recognizer rec(cfg);
-  ASRSession session(rec, vad_cfg, cfg);
+  ASRSession session(rec, vad_cfg, cfg, "realtime_websocket");
 
   // First session
   std::vector<float> silence(2048, 0.0f);
@@ -153,7 +153,7 @@ TEST(Handler, AutoRolloverAfterMaxDurationWithoutReset) {
 
   auto       vad_cfg = make_vad_config(cfg);
   Recognizer rec(cfg);
-  ASRSession session(rec, vad_cfg, cfg);
+  ASRSession session(rec, vad_cfg, cfg, "realtime_websocket");
 
   std::vector<float> chunk(1024, 0.0f);
 
@@ -176,7 +176,7 @@ TEST(Handler, LivePeriodicFlushDoesNotEmitDone) {
 
   auto       vad_cfg = make_vad_config(cfg);
   Recognizer rec(cfg);
-  ASRSession session(rec, vad_cfg, cfg);
+  ASRSession session(rec, vad_cfg, cfg, "realtime_websocket");
 
   // 4096 samples at 16k = 0.256s, enough to trigger periodic live flush.
   std::vector<float> silence(4096, 0.0f);

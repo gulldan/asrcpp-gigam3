@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <new>
 #include <string>
@@ -157,7 +158,7 @@ asr::VadConfig make_vad_config(const asr::Config& cfg) {
 
 }  // namespace
 
-int main() {
+int run_benchmarks() {
   if (!models_exist()) {
     std::printf("ERROR: Models not found. Place models in models/ directory.\n");
     return 1;
@@ -242,7 +243,7 @@ int main() {
     {
       AllocScope scope("Metrics: observe_request()");
       for (int i = 0; i < 100; ++i) {
-        metrics.observe_request(1.0, 0.5, 0.3, 10, 4096, 0.01, 0.0, "websocket", "success");
+        metrics.observe_request(1.0, 0.5, 0.3, 10, 4096, 0.01, 0.0, "http", "success");
       }
       scope.report(100);
     }
@@ -271,7 +272,7 @@ int main() {
   std::printf("\n--- Full on_audio / on_recognize ---\n\n");
 
   asr::Recognizer recognizer(cfg);
-  asr::ASRSession session(recognizer, vad_cfg, cfg);
+  asr::ASRSession session(recognizer, vad_cfg, cfg, "realtime_websocket");
 
   const int                chunk_size = 1024;
   const std::vector<float> silence(chunk_size, 0.0f);
@@ -384,6 +385,17 @@ int main() {
   std::printf("  valgrind --tool=dhat ./build/debug/tests/asr_alloc_bench\n");
   std::printf("  valgrind --tool=massif ./build/debug/tests/asr_alloc_bench\n");
   std::printf("  ms_print massif.out.<pid>\n");
-
   return 0;
+}
+
+int main() {
+  try {
+    return run_benchmarks();
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "bench_alloc failed: %s\n", e.what());
+    return 1;
+  } catch (...) {
+    std::fputs("bench_alloc failed: unknown exception\n", stderr);
+    return 1;
+  }
 }

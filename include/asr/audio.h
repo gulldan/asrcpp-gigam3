@@ -9,6 +9,12 @@
 #include <vector>
 
 namespace asr {
+
+enum class OpusPacketMode {
+  Auto,
+  Raw,
+  Rtp,
+};
 template <typename T>
 class span;
 }  // namespace asr
@@ -69,12 +75,12 @@ std::vector<float> pcm16_to_float32(span<const uint8_t> pcm16_data);
 void pcm16_to_float32_into(span<const uint8_t> pcm16_data, std::vector<float>& out);
 
 // Decode realtime binary audio payload according to selected format.
-// Supported formats: pcm16, opus. g711_* placeholders return AudioError.
+// Supported formats: pcm16, opus, opus_raw, opus_rtp.
 std::vector<float> decode_realtime_audio_bytes(span<const uint8_t> audio_bytes,
                                                std::string_view format = "pcm16", int target_rate = 16000);
 
 // Decode OpenAI Realtime-style base64 audio payload.
-// Supported formats: pcm16, opus. g711_* placeholders return AudioError.
+// Supported formats: pcm16, opus, opus_raw, opus_rtp.
 std::vector<float> decode_realtime_audio(std::string_view base64_audio, std::string_view format = "pcm16",
                                          int target_rate = 16000);
 
@@ -84,7 +90,8 @@ std::vector<float> decode_realtime_audio(std::string_view base64_audio, std::str
 // and uses in-band FEC when possible for single-packet loss bursts.
 class RealtimeOpusDecoder {
  public:
-  explicit RealtimeOpusDecoder(int sample_rate = 48000, size_t max_plc_packets = 8, bool enable_fec = true);
+  explicit RealtimeOpusDecoder(int sample_rate = 48000, size_t max_plc_packets = 8, bool enable_fec = true,
+                               OpusPacketMode packet_mode = OpusPacketMode::Auto);
   ~RealtimeOpusDecoder();
   RealtimeOpusDecoder(const RealtimeOpusDecoder&)            = delete;
   RealtimeOpusDecoder& operator=(const RealtimeOpusDecoder&) = delete;
@@ -107,6 +114,7 @@ class RealtimeOpusDecoder {
   int                last_frame_samples_ = 0;
   size_t             max_plc_packets_    = 0;
   bool               enable_fec_         = true;
+  OpusPacketMode     packet_mode_        = OpusPacketMode::Auto;
   bool               have_last_seq_      = false;
   uint16_t           last_seq_           = 0;
   OpusDecodeStats    stats_{};

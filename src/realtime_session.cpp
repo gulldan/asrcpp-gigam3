@@ -1,9 +1,15 @@
 #include "asr/realtime_session.h"
 
 #include <algorithm>
-#include <cctype>
+#include <cstdint>
+#include <map>
 #include <string_view>
 #include <utility>
+
+#include "asr/config.h"
+#include "asr/json_utils.h"
+#include "asr/string_utils.h"
+#include "nlohmann/json.hpp"
 
 namespace asr {
 
@@ -15,15 +21,82 @@ void set_error(std::string* out, std::string message) {
   }
 }
 
-std::string to_lower_ascii(std::string_view value) {
-  std::string out(value.begin(), value.end());
-  std::transform(out.begin(), out.end(), out.begin(),
-                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+std::string event_speech_started_json(std::string_view event_id, std::string_view item_id,
+                                      int64_t audio_start_ms) {
+  std::string out;
+  out.reserve(128);
+  out.append(R"({"type":"input_audio_buffer.speech_started","event_id":")");
+  out.append(event_id);
+  out.append(R"(","audio_start_ms":)");
+  append_decimal(out, audio_start_ms);
+  out.append(R"(,"item_id":")");
+  out.append(item_id);
+  out.append("\"}");
+  return out;
+}
+
+std::string event_speech_stopped_json(std::string_view event_id, std::string_view item_id,
+                                      int64_t audio_end_ms) {
+  std::string out;
+  out.reserve(128);
+  out.append(R"({"type":"input_audio_buffer.speech_stopped","event_id":")");
+  out.append(event_id);
+  out.append(R"(","audio_end_ms":)");
+  append_decimal(out, audio_end_ms);
+  out.append(R"(,"item_id":")");
+  out.append(item_id);
+  out.append("\"}");
+  return out;
+}
+
+std::string event_buffer_committed_json(std::string_view event_id, const RealtimeCommittedItem& commit) {
+  std::string out;
+  out.reserve(160);
+  out.append(R"({"type":"input_audio_buffer.committed","event_id":")");
+  out.append(event_id);
+  out.append(R"(","item_id":")");
+  out.append(commit.item_id);
+  out.append(R"(","previous_item_id":)");
+  if (commit.previous_item_id.empty()) {
+    out.append("null");
+  } else {
+    out.push_back('"');
+    out.append(commit.previous_item_id);
+    out.push_back('"');
+  }
+  out.push_back('}');
+  return out;
+}
+
+std::string event_buffer_cleared_json(std::string_view event_id) {
+  std::string out;
+  out.reserve(96);
+  out.append(R"({"type":"input_audio_buffer.cleared","event_id":")");
+  out.append(event_id);
+  out.append("\"}");
+  return out;
+}
+
+std::string event_transcription_completed_json(std::string_view event_id, std::string_view item_id,
+                                               std::string_view transcript) {
+  std::string out;
+  out.reserve(160 + transcript.size());
+  out.append(R"({"type":"conversation.item.input_audio_transcription.completed","event_id":")");
+  out.append(event_id);
+  out.append(R"(","item_id":")");
+  out.append(item_id);
+  out.append(R"(","content_index":0,"transcript":")");
+  append_json_escaped(out, transcript);
+  out.append("\"}");
   return out;
 }
 
 bool is_supported_input_audio_format(const std::string& format) {
-  return format == "pcm16" || format == "opus" || format == "g711_ulaw" || format == "g711_alaw";
+  return format == "pcm16" || format == "opus" || format == "opus_raw" || format == "opus_rtp";
+}
+
+bool is_opus_input_audio_format(const std::string& format) {
+  return format == "opus" || format == "opus_raw" || format == "opus_rtp";
 }
 
 bool is_supported_opus_output_sample_rate(int sample_rate) {
@@ -62,7 +135,8 @@ VadConfig make_realtime_vad_config(const Config& base_config, const RealtimeSess
   vad.context_size         = base_config.vad_context_size;
 
   if (realtime_config.turn_detection.has_value()) {
-    vad.threshold = std::clamp(realtime_config.turn_detection->threshold, 0.01F, 0.99F);
+    vad.threshold         = std::clamp(realtime_config.turn_detection->threshold, 0.01F, 0.99F);
+    vad.prefix_padding_ms = std::max(0, realtime_config.turn_detection->prefix_padding_ms);
     vad.min_silence_duration =
         std::max(0.01F, static_cast<float>(realtime_config.turn_detection->silence_duration_ms) / 1000.0F);
   }
@@ -71,9 +145,7 @@ VadConfig make_realtime_vad_config(const Config& base_config, const RealtimeSess
 }
 
 RealtimeSession::RealtimeSession(uint64_t connection_id, RealtimeSessionConfig config)
-    : connection_id_(connection_id),
-      session_id_("sess_" + std::to_string(connection_id)),
-      config_(std::move(config)) {}
+    : session_id_("sess_" + std::to_string(connection_id)), config_(std::move(config)) {}
 
 const RealtimeSessionConfig& RealtimeSession::config() const {
   return config_;
@@ -119,14 +191,14 @@ bool RealtimeSession::apply_session_update(const nlohmann::json& update, std::st
     next.input_sample_rate = rate;
   }
 
-  if (next.input_audio_format == "opus") {
-    if (has_format_update && !has_rate_update && config_.input_audio_format != "opus") {
+  if (is_opus_input_audio_format(next.input_audio_format)) {
+    if (has_format_update && !has_rate_update && !is_opus_input_audio_format(config_.input_audio_format)) {
       // RFC 7587 uses 48k RTP timestamp clock. Keep this as default for Opus sessions.
       next.input_sample_rate = 48000;
     }
     if (!is_supported_opus_output_sample_rate(next.input_sample_rate)) {
       set_error(error_message,
-                "session.input_sample_rate for opus must be one of: 8000, 12000, 16000, 24000, 48000");
+                "session.input_sample_rate for opus* must be one of: 8000, 12000, 16000, 24000, 48000");
       return false;
     }
   }
@@ -136,7 +208,7 @@ bool RealtimeSession::apply_session_update(const nlohmann::json& update, std::st
       set_error(error_message, "session.model must be a string");
       return false;
     }
-    next.input_audio_transcription.model = update["model"].get<std::string>();
+    next.input_audio_transcription.model = trim_ascii(update["model"].get<std::string>());
   }
 
   if (update.contains("input_audio_transcription")) {
@@ -150,21 +222,21 @@ bool RealtimeSession::apply_session_update(const nlohmann::json& update, std::st
         set_error(error_message, "session.input_audio_transcription.model must be a string");
         return false;
       }
-      next.input_audio_transcription.model = tr["model"].get<std::string>();
+      next.input_audio_transcription.model = trim_ascii(tr["model"].get<std::string>());
     }
     if (tr.contains("language")) {
       if (!tr["language"].is_string()) {
         set_error(error_message, "session.input_audio_transcription.language must be a string");
         return false;
       }
-      next.input_audio_transcription.language = tr["language"].get<std::string>();
+      next.input_audio_transcription.language = trim_ascii(tr["language"].get<std::string>());
     }
     if (tr.contains("prompt")) {
       if (!tr["prompt"].is_string()) {
         set_error(error_message, "session.input_audio_transcription.prompt must be a string");
         return false;
       }
-      next.input_audio_transcription.prompt = tr["prompt"].get<std::string>();
+      next.input_audio_transcription.prompt = trim_ascii(tr["prompt"].get<std::string>());
     }
   }
 
@@ -223,6 +295,19 @@ bool RealtimeSession::apply_session_update(const nlohmann::json& update, std::st
         next.turn_detection = td_next;
       }
     }
+  }
+
+  if (!next.input_audio_transcription.model.empty() && next.input_audio_transcription.model != "default") {
+    set_error(error_message, "session.input_audio_transcription.model currently supports only 'default'");
+    return false;
+  }
+  if (!next.input_audio_transcription.language.empty()) {
+    set_error(error_message, "session.input_audio_transcription.language is not supported by this backend");
+    return false;
+  }
+  if (!next.input_audio_transcription.prompt.empty()) {
+    set_error(error_message, "session.input_audio_transcription.prompt is not supported by this backend");
+    return false;
   }
 
   config_ = std::move(next);
@@ -298,41 +383,25 @@ std::string RealtimeSession::event_session_updated() {
 }
 
 std::string RealtimeSession::event_speech_started(int64_t audio_start_ms) {
-  nlohmann::json event;
-  event["type"]           = "input_audio_buffer.speech_started";
-  event["event_id"]       = next_event_id();
-  event["audio_start_ms"] = audio_start_ms;
-  event["item_id"]        = ensure_current_item_id();
-  return event.dump();
+  const auto event_id = next_event_id();
+  const auto item_id  = ensure_current_item_id();
+  return event_speech_started_json(event_id, item_id, audio_start_ms);
 }
 
 std::string RealtimeSession::event_speech_stopped(int64_t audio_end_ms) {
-  nlohmann::json event;
-  event["type"]         = "input_audio_buffer.speech_stopped";
-  event["event_id"]     = next_event_id();
-  event["audio_end_ms"] = audio_end_ms;
-  event["item_id"]      = ensure_current_item_id();
-  return event.dump();
+  const auto event_id = next_event_id();
+  const auto item_id  = ensure_current_item_id();
+  return event_speech_stopped_json(event_id, item_id, audio_end_ms);
 }
 
 std::string RealtimeSession::event_buffer_committed(const RealtimeCommittedItem& commit) {
-  nlohmann::json event;
-  event["type"]     = "input_audio_buffer.committed";
-  event["event_id"] = next_event_id();
-  event["item_id"]  = commit.item_id;
-  if (commit.previous_item_id.empty()) {
-    event["previous_item_id"] = nullptr;
-  } else {
-    event["previous_item_id"] = commit.previous_item_id;
-  }
-  return event.dump();
+  const auto event_id = next_event_id();
+  return event_buffer_committed_json(event_id, commit);
 }
 
 std::string RealtimeSession::event_buffer_cleared() {
-  nlohmann::json event;
-  event["type"]     = "input_audio_buffer.cleared";
-  event["event_id"] = next_event_id();
-  return event.dump();
+  const auto event_id = next_event_id();
+  return event_buffer_cleared_json(event_id);
 }
 
 std::string RealtimeSession::event_transcription_delta(const std::string& item_id, const std::string& delta) {
@@ -347,13 +416,8 @@ std::string RealtimeSession::event_transcription_delta(const std::string& item_i
 
 std::string RealtimeSession::event_transcription_completed(const std::string& item_id,
                                                            const std::string& transcript) {
-  nlohmann::json event;
-  event["type"]          = "conversation.item.input_audio_transcription.completed";
-  event["event_id"]      = next_event_id();
-  event["item_id"]       = item_id;
-  event["content_index"] = 0;
-  event["transcript"]    = transcript;
-  return event.dump();
+  const auto event_id = next_event_id();
+  return event_transcription_completed_json(event_id, item_id, transcript);
 }
 
 std::string RealtimeSession::event_error(const std::string& code, const std::string& message,

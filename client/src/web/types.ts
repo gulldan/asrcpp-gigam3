@@ -1,11 +1,6 @@
 // Shared constants and types for the web frontend
 
 export const REALTIME_WS_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/v1/realtime`;
-export const WS_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
-
-export const FILE_CHUNK_SIZE = 16000;
-export const FILE_SEND_DELAY_MS = 0;
-export const WS_CONNECT_TIMEOUT_MS = 8000;
 export const REALTIME_CONNECT_TIMEOUT_MS = 8000;
 export const REALTIME_RECONNECT_BASE_DELAY_MS = 1000;
 export const REALTIME_RECONNECT_MAX_DELAY_MS = 10000;

@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <math.h>
 
 #include <cmath>
 #include <cstddef>
@@ -47,8 +48,8 @@ std::vector<float> make_speech_signal(float duration_sec, int sample_rate = 1600
     // Mix of frequencies to look more like speech
     const float t = static_cast<float>(i) / static_cast<float>(sample_rate);
     samples[i]    = 0.3f * std::sin(2.0f * static_cast<float>(M_PI) * 200.0f * t) +
-                 0.2f * std::sin(2.0f * static_cast<float>(M_PI) * 500.0f * t) +
-                 0.1f * std::sin(2.0f * static_cast<float>(M_PI) * 1000.0f * t);
+                    0.2f * std::sin(2.0f * static_cast<float>(M_PI) * 500.0f * t) +
+                    0.1f * std::sin(2.0f * static_cast<float>(M_PI) * 1000.0f * t);
   }
   return samples;
 }

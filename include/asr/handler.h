@@ -19,11 +19,15 @@ namespace asr {
 
 class ASRSession {
  public:
-  ASRSession(Recognizer& recognizer, const VadConfig& vad_config, const Config& config);
+  using SpeechTransition = asr::SpeechTransition;
+
+  ASRSession(Recognizer& recognizer, const VadConfig& vad_config, const Config& config,
+             std::string metrics_mode);
 
   struct OutMessage {
     enum Type { Interim, Final, Done } type = Interim;
     std::string json;
+    std::string text;
   };
 
   // Process binary audio chunk (float32 samples).
@@ -40,7 +44,10 @@ class ASRSession {
   // Handle connection close — clean up session metrics
   void on_close();
 
-  [[nodiscard]] bool is_speech() const;
+  [[nodiscard]] bool                    is_speech() const;
+  [[nodiscard]] bool                    has_speech_transition() const;
+  [[nodiscard]] const SpeechTransition& front_speech_transition() const;
+  void                                  pop_speech_transition();
 
  private:
   using SteadyClock = std::chrono::steady_clock;
@@ -82,6 +89,7 @@ class ASRSession {
   Recognizer&           recognizer_;
   VoiceActivityDetector vad_;
   const Config&         config_;
+  std::string           metrics_mode_;
 
   // Sub-window accumulator
   std::vector<float> pending_;

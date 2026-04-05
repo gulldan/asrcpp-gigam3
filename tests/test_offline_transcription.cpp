@@ -1,9 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "asr/offline_transcription.h"
+#include "asr/span.h"
 
 namespace asr {
 

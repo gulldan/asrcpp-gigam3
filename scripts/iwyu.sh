@@ -115,6 +115,51 @@ IWYU_OUTPUT=$(
     "${IWYU_ARGS[@]}" 2>&1
 ) || true
 
+filter_iwyu_output() {
+  python3 - <<'PY'
+import sys
+
+lines = sys.stdin.readlines()
+out = []
+i = 0
+suppressed = 0
+
+while i < len(lines):
+    line = lines[i]
+    if line.startswith("/") and " should add these lines:" in line:
+        block = [line]
+        j = i + 1
+        while j < len(lines):
+            block.append(lines[j])
+            if lines[j].strip() == "---":
+                j += 1
+                break
+            j += 1
+        block_text = "".join(block)
+        is_math_false_positive = (
+            "#include <math>" in block_text
+            and "#include <math.h>" in block_text
+            and "should add these lines:" in block_text
+            and "should remove these lines:" in block_text
+        )
+        if is_math_false_positive:
+            suppressed += 1
+        else:
+            out.extend(block)
+        i = j
+        continue
+
+    out.append(line)
+    i += 1
+
+sys.stdout.write("".join(out))
+if suppressed:
+    sys.stdout.write(f"IWYU note: suppressed {suppressed} Darwin <math>/<math.h> false-positive block(s).\n")
+PY
+}
+
+IWYU_OUTPUT="$(printf '%s' "${IWYU_OUTPUT}" | filter_iwyu_output)"
+
 echo "${IWYU_OUTPUT}"
 
 if echo "${IWYU_OUTPUT}" | grep -q "should add these lines\|should remove these lines"; then

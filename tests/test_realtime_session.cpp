@@ -1,18 +1,28 @@
 #include <gtest/gtest.h>
+#include <math.h>
 #include <opus/opus.h>
+#include <opus/opus_defines.h>
+#include <opus/opus_types.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <initializer_list>
+#include <map>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "asr/audio.h"
 #include "asr/config.h"
 #include "asr/realtime_session.h"
 #include "asr/span.h"
+#include "asr/vad.h"
+#include "nlohmann/detail/json_ref.hpp"
 
 namespace asr {
 namespace {
@@ -95,9 +105,7 @@ TEST(RealtimeSession, ApplySessionUpdateAcceptsValidFields) {
   update["input_audio_format"]        = "PCM16";
   update["input_sample_rate"]         = 24000;
   update["input_audio_transcription"] = {
-      {"model", "gigam-v3"},
-      {"language", "ru"},
-      {"prompt", "test prompt"},
+      {"model", "default"},
   };
   update["turn_detection"] = {
       {"type", "server_vad"},
@@ -113,9 +121,9 @@ TEST(RealtimeSession, ApplySessionUpdateAcceptsValidFields) {
   const auto& cfg = session.config();
   EXPECT_EQ(cfg.input_audio_format, "pcm16");
   EXPECT_EQ(cfg.input_sample_rate, 24000);
-  EXPECT_EQ(cfg.input_audio_transcription.model, "gigam-v3");
-  EXPECT_EQ(cfg.input_audio_transcription.language, "ru");
-  EXPECT_EQ(cfg.input_audio_transcription.prompt, "test prompt");
+  EXPECT_EQ(cfg.input_audio_transcription.model, "default");
+  EXPECT_TRUE(cfg.input_audio_transcription.language.empty());
+  EXPECT_TRUE(cfg.input_audio_transcription.prompt.empty());
   ASSERT_TRUE(cfg.turn_detection.has_value());
   const auto turn = cfg.turn_detection.value_or(RealtimeSessionConfig::TurnDetection{});
   EXPECT_EQ(turn.type, "server_vad");
@@ -142,6 +150,31 @@ TEST(RealtimeSession, ApplySessionUpdateRejectsInvalidFields) {
   bad_turn["turn_detection"] = {{"type", "client_vad"}};
   EXPECT_FALSE(session.apply_session_update(bad_turn, &error));
   EXPECT_NE(error.find("turn_detection.type"), std::string::npos);
+}
+
+TEST(RealtimeSession, ApplySessionUpdateRejectsUnsupportedTranscriptionFields) {
+  RealtimeSession session(8);
+  std::string     error;
+
+  nlohmann::json bad_model = {
+      {"input_audio_transcription", {{"model", "gigaam-v3"}}},
+  };
+  EXPECT_FALSE(session.apply_session_update(bad_model, &error));
+  EXPECT_NE(error.find("model"), std::string::npos);
+
+  error.clear();
+  nlohmann::json bad_language = {
+      {"input_audio_transcription", {{"language", "ru"}}},
+  };
+  EXPECT_FALSE(session.apply_session_update(bad_language, &error));
+  EXPECT_NE(error.find("language"), std::string::npos);
+
+  error.clear();
+  nlohmann::json bad_prompt = {
+      {"input_audio_transcription", {{"prompt", "test"}}},
+  };
+  EXPECT_FALSE(session.apply_session_update(bad_prompt, &error));
+  EXPECT_NE(error.find("prompt"), std::string::npos);
 }
 
 TEST(RealtimeSession, TurnDetectionCanBeDisabledWithNull) {
@@ -225,14 +258,28 @@ TEST(RealtimeSessionAudio, DecodeRealtimeAudioPcm16) {
 TEST(RealtimeSessionAudio, DecodeRealtimeAudioRejectsInvalidPayloadAndFormat) {
   EXPECT_THROW(decode_realtime_audio("$", "pcm16"), AudioError);
   EXPECT_THROW(decode_realtime_audio("AAAA", "g711_ulaw"), AudioError);
+  EXPECT_THROW(decode_realtime_audio("AAAA", "bogus"), AudioError);
   EXPECT_THROW(decode_realtime_audio("", "opus"), AudioError);
+}
+
+TEST(RealtimeSessionAudio, DecodeRealtimeAudioBytesDecodesExplicitOpusRawAndRtp) {
+  constexpr int kSampleRate   = 48000;
+  constexpr int kFrameSamples = 960;
+
+  const auto raw_packet = encode_opus_packet(kSampleRate, kFrameSamples, 0.0F);
+  const auto raw_audio  = decode_realtime_audio_bytes(raw_packet, "opus_raw", kSampleRate);
+  EXPECT_GE(raw_audio.size(), static_cast<size_t>(kFrameSamples));
+
+  const auto rtp_packet = wrap_rtp_packet(raw_packet, 10, 48000);
+  const auto rtp_audio  = decode_realtime_audio_bytes(rtp_packet, "opus_rtp", kSampleRate);
+  EXPECT_GE(rtp_audio.size(), static_cast<size_t>(kFrameSamples));
 }
 
 TEST(RealtimeSessionAudio, RealtimeOpusDecoderDecodesRawPacket) {
   constexpr int kSampleRate   = 48000;
   constexpr int kFrameSamples = 960;  // 20 ms at 48 kHz
 
-  RealtimeOpusDecoder decoder(kSampleRate);
+  RealtimeOpusDecoder decoder(kSampleRate, 8, true, OpusPacketMode::Raw);
   const auto          packet  = encode_opus_packet(kSampleRate, kFrameSamples, 0.0F);
   const auto          samples = decoder.decode_packet(packet);
 
@@ -246,7 +293,7 @@ TEST(RealtimeSessionAudio, RealtimeOpusDecoderHandlesSinglePacketLossForRtp) {
   constexpr int kSampleRate   = 48000;
   constexpr int kFrameSamples = 960;  // 20 ms at 48 kHz
 
-  RealtimeOpusDecoder decoder(kSampleRate);
+  RealtimeOpusDecoder decoder(kSampleRate, 8, true, OpusPacketMode::Rtp);
   const auto          payload1 = encode_opus_packet(kSampleRate, kFrameSamples, 0.0F);
   const auto          payload2 = encode_opus_packet(kSampleRate, kFrameSamples, 0.5F);
   const auto          rtp1     = wrap_rtp_packet(payload1, 100, 48000);
@@ -294,29 +341,32 @@ TEST(RealtimeSessionConfig, RealtimeVadConfigUsesRealtimeThreshold) {
   RealtimeSessionConfig realtime_cfg;
   realtime_cfg.turn_detection                      = RealtimeSessionConfig::TurnDetection{};
   realtime_cfg.turn_detection->threshold           = 0.9F;
+  realtime_cfg.turn_detection->prefix_padding_ms   = 180;
   realtime_cfg.turn_detection->silence_duration_ms = 1200;
 
   const auto vad_cfg = make_realtime_vad_config(cfg, realtime_cfg);
   EXPECT_FLOAT_EQ(vad_cfg.threshold, 0.9F);
+  EXPECT_EQ(vad_cfg.prefix_padding_ms, 180);
   EXPECT_NEAR(vad_cfg.min_silence_duration, 1.2F, 1e-6F);
 }
 
 TEST(RealtimeSessionConfig, OpusUpdateDefaultsTo48kAndValidatesRates) {
-  RealtimeSession session(11);
+  for (const std::string format : {"opus", "opus_raw", "opus_rtp"}) {
+    RealtimeSession session(11);
+    nlohmann::json  to_opus = {{"input_audio_format", format}};
+    std::string     error;
+    ASSERT_TRUE(session.apply_session_update(to_opus, &error)) << format << ": " << error;
+    EXPECT_EQ(session.config().input_audio_format, format);
+    EXPECT_EQ(session.config().input_sample_rate, 48000);
 
-  nlohmann::json to_opus = {{"input_audio_format", "opus"}};
-  std::string    error;
-  ASSERT_TRUE(session.apply_session_update(to_opus, &error)) << error;
-  EXPECT_EQ(session.config().input_audio_format, "opus");
-  EXPECT_EQ(session.config().input_sample_rate, 48000);
-
-  nlohmann::json bad_rate = {
-      {"input_audio_format", "opus"},
-      {"input_sample_rate", 44100},
-  };
-  error.clear();
-  EXPECT_FALSE(session.apply_session_update(bad_rate, &error));
-  EXPECT_NE(error.find("input_sample_rate for opus"), std::string::npos);
+    nlohmann::json bad_rate = {
+        {"input_audio_format", format},
+        {"input_sample_rate", 44100},
+    };
+    error.clear();
+    EXPECT_FALSE(session.apply_session_update(bad_rate, &error));
+    EXPECT_NE(error.find("input_sample_rate for opus"), std::string::npos);
+  }
 }
 
 }  // namespace

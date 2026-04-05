@@ -1,8 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <map>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "asr/whisper_api.h"
 
@@ -49,15 +53,14 @@ TEST(WhisperApi, ParseRejectsTimestampWithoutVerboseJson) {
   EXPECT_EQ(err.param, "timestamp_granularities[]");
 }
 
-TEST(WhisperApi, ParseVerboseJsonGranularities) {
+TEST(WhisperApi, ParseVerboseJsonSegmentGranularity) {
   WhisperTranscriptionRequest                        request;
   const std::unordered_map<std::string, std::string> fields = {
       {"model", "whisper-1"},
       {"response_format", "verbose_json"},
-      {"timestamp_granularities[]", "word,segment"},
+      {"timestamp_granularities[]", "segment"},
       {"language", " ru "},
-      {"prompt", " test "},
-      {"temperature", "0.2"},
+      {"temperature", "0"},
       {"stream", "false"},
   };
 
@@ -65,12 +68,13 @@ TEST(WhisperApi, ParseVerboseJsonGranularities) {
   ASSERT_FALSE(error.has_value());
   EXPECT_EQ(request.model, "whisper-1");
   EXPECT_EQ(request.language, "ru");
-  EXPECT_EQ(request.prompt, "test");
+  EXPECT_TRUE(request.prompt.empty());
   ASSERT_TRUE(request.temperature.has_value());
-  EXPECT_NEAR(request.temperature.value_or(0.0), 0.2, 1e-6);
+  EXPECT_NEAR(request.temperature.value_or(1.0), 0.0, 1e-6);
   EXPECT_FALSE(request.stream);
   EXPECT_EQ(request.response_format, WhisperResponseFormat::VerboseJson);
-  EXPECT_EQ(request.timestamp_granularities.size(), 2);
+  ASSERT_EQ(request.timestamp_granularities.size(), 1);
+  EXPECT_EQ(request.timestamp_granularities[0], WhisperTimestampGranularity::Segment);
 }
 
 TEST(WhisperApi, ParseRejectsUnsupportedIncludeLogprobs) {
@@ -99,6 +103,90 @@ TEST(WhisperApi, ParseRejectsInvalidTemperature) {
   const WhisperApiValidationError err   = error.value_or(WhisperApiValidationError{});
   ASSERT_TRUE(error.has_value());
   EXPECT_EQ(err.param, "temperature");
+}
+
+TEST(WhisperApi, ParseRejectsUnsupportedModel) {
+  WhisperTranscriptionRequest                        request;
+  const std::unordered_map<std::string, std::string> fields = {
+      {"model", "whisper-large-v2"},
+  };
+
+  auto                            error = parse_whisper_transcription_request(fields, &request);
+  const WhisperApiValidationError err   = error.value_or(WhisperApiValidationError{});
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(err.param, "model");
+  EXPECT_EQ(err.code, "unsupported_value");
+}
+
+TEST(WhisperApi, ParseRejectsUnsupportedLanguage) {
+  WhisperTranscriptionRequest                        request;
+  const std::unordered_map<std::string, std::string> fields = {
+      {"model", "whisper-1"},
+      {"language", "en"},
+  };
+
+  auto                            error = parse_whisper_transcription_request(fields, &request);
+  const WhisperApiValidationError err   = error.value_or(WhisperApiValidationError{});
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(err.param, "language");
+  EXPECT_EQ(err.code, "unsupported_value");
+}
+
+TEST(WhisperApi, ParseRejectsUnsupportedPrompt) {
+  WhisperTranscriptionRequest                        request;
+  const std::unordered_map<std::string, std::string> fields = {
+      {"model", "whisper-1"},
+      {"prompt", "context"},
+  };
+
+  auto                            error = parse_whisper_transcription_request(fields, &request);
+  const WhisperApiValidationError err   = error.value_or(WhisperApiValidationError{});
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(err.param, "prompt");
+  EXPECT_EQ(err.code, "unsupported_value");
+}
+
+TEST(WhisperApi, ParseRejectsStreaming) {
+  WhisperTranscriptionRequest                        request;
+  const std::unordered_map<std::string, std::string> fields = {
+      {"model", "whisper-1"},
+      {"stream", "true"},
+  };
+
+  auto                            error = parse_whisper_transcription_request(fields, &request);
+  const WhisperApiValidationError err   = error.value_or(WhisperApiValidationError{});
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(err.param, "stream");
+  EXPECT_EQ(err.code, "unsupported_value");
+}
+
+TEST(WhisperApi, ParseRejectsNonZeroTemperature) {
+  WhisperTranscriptionRequest                        request;
+  const std::unordered_map<std::string, std::string> fields = {
+      {"model", "whisper-1"},
+      {"temperature", "0.2"},
+  };
+
+  auto                            error = parse_whisper_transcription_request(fields, &request);
+  const WhisperApiValidationError err   = error.value_or(WhisperApiValidationError{});
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(err.param, "temperature");
+  EXPECT_EQ(err.code, "unsupported_value");
+}
+
+TEST(WhisperApi, ParseRejectsWordGranularity) {
+  WhisperTranscriptionRequest                        request;
+  const std::unordered_map<std::string, std::string> fields = {
+      {"model", "whisper-1"},
+      {"response_format", "verbose_json"},
+      {"timestamp_granularities[]", "word"},
+  };
+
+  auto                            error = parse_whisper_transcription_request(fields, &request);
+  const WhisperApiValidationError err   = error.value_or(WhisperApiValidationError{});
+  ASSERT_TRUE(error.has_value());
+  EXPECT_EQ(err.param, "timestamp_granularities[]");
+  EXPECT_EQ(err.code, "unsupported_value");
 }
 
 TEST(WhisperApi, RenderJsonResponse) {
@@ -182,11 +270,11 @@ TEST(WhisperApi, RenderVerboseJsonDefaultsToSegments) {
   ASSERT_EQ(json["segments"].size(), 1);
 }
 
-TEST(WhisperApi, RenderVerboseJsonWordsAndSegments) {
+TEST(WhisperApi, RenderVerboseJsonOmitsWords) {
   WhisperTranscriptionRequest request;
   request.model                   = "whisper-1";
   request.response_format         = WhisperResponseFormat::VerboseJson;
-  request.timestamp_granularities = {WhisperTimestampGranularity::Word, WhisperTimestampGranularity::Segment};
+  request.timestamp_granularities = {WhisperTimestampGranularity::Segment};
 
   WhisperTranscriptionResponsePayload payload;
   payload.text         = "one two";
@@ -196,10 +284,9 @@ TEST(WhisperApi, RenderVerboseJsonWordsAndSegments) {
   auto rendered = render_whisper_transcription_response(request, payload);
   auto json     = nlohmann::json::parse(rendered.body);
 
-  ASSERT_TRUE(json.contains("words"));
   ASSERT_TRUE(json.contains("segments"));
-  ASSERT_EQ(json["words"].size(), 2);
-  EXPECT_EQ(json["words"][0]["word"], "one");
+  EXPECT_FALSE(json.contains("words"));
+  ASSERT_EQ(json["segments"].size(), 1);
 }
 
 TEST(WhisperApi, BuildErrorJson) {

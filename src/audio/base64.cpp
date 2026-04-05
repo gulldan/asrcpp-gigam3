@@ -1,5 +1,9 @@
+#include <_ctype.h>
+
 #include <cctype>
 #include <cstdint>
+#include <string_view>
+#include <vector>
 
 #include "asr/audio.h"
 

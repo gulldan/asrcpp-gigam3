@@ -1,260 +1,207 @@
 # ASR Server (C++)
 
-Сервер распознавания речи на базе [GigaAM v3](https://github.com/salute-developers/GigaAM) с HTTP и WebSocket интерфейсами.
+Сервер распознавания речи на базе [GigaAM v3](https://github.com/salute-developers/GigaAM) с HTTP, Realtime WebSocket и OpenAI-compatible API.
 
-Используемые технологии:
+Основа стека:
 
-- **ASR-модель**: [GigaAM v3](https://github.com/salute-developers/GigaAM) — модель распознавания русской речи от SberDevices (NeMo Transducer). Портирована в [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) формат.
-- **Inference runtime**: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (часть проекта [k2-fsa / next-gen Kaldi](https://github.com/k2-fsa)) — C/C++ библиотека для оффлайн/онлайн распознавания на базе ONNX Runtime.
-- **Voice Activity Detection**: [Silero VAD](https://github.com/snakers4/silero-vad) — модель определения речевой активности, запускается через ONNX Runtime.
+- [GigaAM v3](https://github.com/salute-developers/GigaAM) в формате `sherpa-onnx`
+- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) для ASR
+- [Silero VAD](https://github.com/snakers4/silero-vad) для детекции речи
+- [Drogon](https://github.com/drogonframework/drogon) для HTTP/WebSocket
+- [prometheus-cpp](https://github.com/jupp0r/prometheus-cpp) для метрик
 
-## Возможности
+## Что умеет
 
-- Потоковое распознавание через WebSocket (float32 аудио)
-- Распознавание файлов через HTTP POST (WAV)
-- Voice Activity Detection (Silero VAD)
-- Prometheus-метрики (`/metrics`)
-- Web-интерфейс для записи с микрофона и загрузки файлов
-- CPU и CUDA (GPU) провайдеры
-- Graceful shutdown по SIGINT/SIGTERM
+- `POST /recognize` для простого распознавания файлов
+- `POST /v1/audio/transcriptions` и `/audio/transcriptions` для Whisper/OpenAI-compatible клиентов
+- `WS /v1/realtime` для OpenAI Realtime-compatible клиентов
+- VAD на сервере, авто-сегментация речи и внутренняя нарезка длинных файлов
+- Prometheus-метрики на `/metrics`
+- Встроенная демо-страница на `/`
+- CPU и CUDA сборки
 
-## Требования
+## Быстрый старт
 
-- CMake >= 3.24
-- C++17 компилятор (GCC 10+ / Clang 14+)
-- Системные библиотеки: libssl, zlib, libjsoncpp, uuid
-- Модели:
-  - [sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models)
-  - [silero_vad.onnx](https://github.com/snakers4/silero-vad/tree/master/files)
+### 1. Установите системные зависимости
 
-Все остальные зависимости (drogon, sherpa-onnx, onnxruntime, prometheus-cpp, spdlog, nlohmann_json, libsamplerate, googletest) скачиваются автоматически через CMake FetchContent.
-
-### Установка системных зависимостей
-
-**Arch Linux:**
+Ubuntu / Debian:
 
 ```bash
-sudo pacman -S cmake clang openssl zlib jsoncpp util-linux-libs cppcheck clang-tools-extra
-paru -S include-what-you-use
+sudo apt install build-essential cmake pkg-config libssl-dev zlib1g-dev libopus-dev
+# Опционально: поддержка .opus файлов в HTTP API
+sudo apt install libopusfile-dev
 ```
 
-**Ubuntu / Debian:**
+macOS:
 
 ```bash
-# Сборка и запуск
-sudo apt install cmake g++ libssl-dev zlib1g-dev libjsoncpp-dev uuid-dev
-
-# Инструменты качества кода
-sudo apt install cppcheck clang-tidy clang-format iwyu
+brew install cmake pkg-config openssl opus
+# Опционально: поддержка .opus файлов в HTTP API
+brew install opusfile
 ```
 
-### Загрузка моделей
+Все остальные зависимости проект скачает сам через CMake `FetchContent`.
+
+### 2. Скачайте модели
 
 ```bash
-# GigaAM v3 (sherpa-onnx формат)
-# Скачайте из https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
-# Распакуйте в models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16/
+mkdir -p models
 
-# Silero VAD
-wget -O models/silero_vad.onnx \
-  https://github.com/snakers4/silero-vad/raw/master/files/silero_vad.onnx
+# 1) Скачайте и распакуйте GigaAM v3 в sherpa-onnx формате:
+#    https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
+#    Директория по умолчанию:
+#    models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16
+
+# 2) Скачайте Silero VAD
+curl -L https://github.com/snakers4/silero-vad/raw/master/files/silero_vad.onnx \
+  -o models/silero_vad.onnx
 ```
 
-## Сборка
+### 3. Соберите проект
+
+Release:
 
 ```bash
-# Release
 cmake --preset release
-cmake --build build/release -j$(nproc)
+cmake --build --preset release --parallel
+```
 
-# Debug с тестами
+Debug с тестами:
+
+```bash
 cmake --preset debug
-cmake --build build/debug -j$(nproc)
+cmake --build --preset debug --parallel
+```
 
-# CUDA (GPU)
+CUDA:
+
+```bash
 cmake --preset cuda
-cmake --build build/cuda -j$(nproc)
+cmake --build --preset cuda --parallel
 ```
 
-### Все пресеты
+Пресет `cuda` поддерживается только на Linux `x64`. На macOS CUDA сборка недоступна.
 
-| Пресет | Тип | Тесты | Описание |
-|--------|-----|-------|----------|
-| `release` | Release + LTO | нет | Продакшен |
-| `debug` | Debug | да | Разработка |
-| `asan` | Debug + ASan/UBSan | да | Поиск ошибок памяти |
-| `tsan` | Debug + TSan | да | Поиск гонок |
-| `coverage` | Debug + gcov | да | Покрытие кода |
-| `cuda` | Release + LTO + CUDA | нет | GPU-ускорение |
+### 4. Запустите сервер
 
-## Запуск
+Если модели лежат в путях по умолчанию:
 
 ```bash
-# Из директории сборки
-./build/release/asr-server
-
-# Или с указанием путей к моделям
-MODEL_DIR=models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16 \
-VAD_MODEL=models/silero_vad.onnx \
 ./build/release/asr-server
 ```
 
-Сервер запустится на `http://0.0.0.0:8081`. Для остановки — `Ctrl+C` (SIGINT) или `kill <pid>` (SIGTERM).
-
-## Docker
+Если модели лежат в другом месте:
 
 ```bash
-# CPU
-docker build -f Dockerfile -t asr-server-cpp .
-docker run -p 8081:8081 asr-server-cpp
-
-# CUDA
-docker build -f Dockerfile.cuda -t asr-server-cpp:cuda .
-docker run -p 8081:8081 --gpus all -e PROVIDER=cuda asr-server-cpp:cuda
+MODEL_DIR=/absolute/path/to/gigaam-model \
+VAD_MODEL=/absolute/path/to/silero_vad.onnx \
+./build/release/asr-server
 ```
 
-CPU Docker-образ теперь собирается для текущей архитектуры Docker (`linux/amd64` или `linux/arm64`).
-CUDA-образ использует prebuilt ONNX Runtime только для `x64`, поэтому на ARM-хостах собирайте с платформой:
+По умолчанию сервер слушает `http://0.0.0.0:8081`.
+
+### 5. Быстрая проверка
 
 ```bash
-docker build --platform=linux/amd64 -f Dockerfile.cuda -t asr-server-cpp:cuda .
+curl http://localhost:8081/healthz
+curl http://localhost:8081/readyz
+curl -F "file=@audio.wav" http://localhost:8081/recognize
 ```
 
-Dockerfile уже разбит на этапы `deps-builder` и `builder`, поэтому при изменении только `src/` или `include/` тяжёлые third-party зависимости переиспользуются из кэша слоёв и не пересобираются с нуля.
+Откройте `http://localhost:8081/` в браузере, если хотите проверить микрофон и загрузку файлов через встроенную demo-страницу.
 
-## Переменные окружения
+## Основные маршруты
 
-### Сервер
+| Метод | Путь | Назначение |
+|------|------|------------|
+| `GET` | `/` | Встроенный web UI |
+| `GET` | `/healthz` | Лёгкий liveness check |
+| `GET` | `/readyz` | Проверка готовности recognizer + VAD |
+| `GET` | `/health` | Backward-compatible alias к `/readyz` |
+| `GET` | `/metrics` | Prometheus-метрики |
+| `POST` | `/recognize` | Простой JSON API |
+| `POST` | `/v1/audio/transcriptions` | Whisper/OpenAI-compatible API |
+| `POST` | `/audio/transcriptions` | Алиас к `/v1/audio/transcriptions` |
+| `WS` | `/v1/realtime` | Realtime-compatible API |
 
-| Переменная | По умолчанию | Описание |
-|------------|-------------|----------|
-| `HOST` | `0.0.0.0` | Адрес привязки |
-| `HTTP_PORT` | `8081` | TCP-порт |
-| `THREADS` | кол-во ядер | Потоки HTTP-сервера (1–256) |
-| `IDLE_CONNECTION_TIMEOUT_SEC` | `0` | Таймаут idle TCP-соединения; `0` = не закрывать |
+## Примеры API
 
-### Параллелизм
-
-| Переменная | По умолчанию | Описание |
-|------------|-------------|----------|
-| `RECOGNIZER_POOL_SIZE` | `1` | Размер пула распознавателей (1–256) |
-| `MAX_CONCURRENT_REQUESTS` | `THREADS * 2` | Лимит одновременных HTTP-запросов |
-
-### Модели
-
-| Переменная | По умолчанию | Описание |
-|------------|-------------|----------|
-| `MODEL_DIR` | `models/sherpa-onnx-nemo-...` | Директория модели sherpa-onnx |
-| `VAD_MODEL` | `models/silero_vad.onnx` | Файл модели VAD |
-| `PROVIDER` | `cpu` | `cpu` или `cuda` |
-| `NUM_THREADS` | `4` | Потоки декодера (1–128) |
-
-### Аудио
-
-| Переменная | По умолчанию | Описание |
-|------------|-------------|----------|
-| `SAMPLE_RATE` | `16000` | Частота дискретизации (8000–48000) |
-| `FEATURE_DIM` | `64` | Размерность фичей |
-| `SILENCE_THRESHOLD` | `0.008` | Порог тишины (RMS) |
-| `MIN_AUDIO_SEC` | `0.5` | Минимальная длительность аудио |
-| `MAX_AUDIO_SEC` | `0.0` | Лимит длительности WS-сессии; `0` = без лимита |
-| `MAX_UPLOAD_BYTES` | `104857600` | Лимит загрузки файла (100 МБ) |
-| `MAX_WS_MESSAGE_BYTES` | `4194304` | Лимит размера одного WS-сообщения (4 МБ) |
-
-### VAD
-
-| Переменная | По умолчанию | Описание |
-|------------|-------------|----------|
-| `VAD_THRESHOLD` | `0.5` | Порог вероятности речи (0.01–0.99) |
-| `VAD_MIN_SILENCE` | `0.5` | Мин. тишина для завершения сегмента (сек) |
-| `VAD_MIN_SPEECH` | `0.25` | Мин. длительность речи (сек) |
-| `VAD_MAX_SPEECH` | `20.0` | Макс. длительность сегмента (сек) |
-| `VAD_WINDOW_SIZE` | `512` | Размер окна VAD (64–4096) |
-| `VAD_CONTEXT_SIZE` | `64` | Контекст VAD (< window_size) |
-
-## API
-
-### `GET /health`
+### `GET /healthz`
 
 ```json
-{"status": "ok", "provider": "cpu", "threads": 4}
+{"status":"ok","provider":"cpu","threads":4}
+```
+
+### `GET /readyz`
+
+```json
+{"status":"ok","provider":"cpu","recognizer_ready":true,"vad_ready":true}
 ```
 
 ### `GET /metrics`
 
-Prometheus-метрики (text format). Префикс: `gigaam_`.
+Prometheus text format с префиксом `gigaam_`.
 
 ### `POST /recognize`
 
-Упрощённый роут распознавания (multipart/form-data):
+Самый простой способ получить текст из файла:
 
 ```bash
 curl -F "file=@audio.wav" http://localhost:8081/recognize
 ```
 
-```json
-{"text": "распознанный текст", "duration": 2.5}
-```
-
-Поддерживаемые форматы: `wav`, `opus` (если сборка выполнена с `libopusfile`).
-В проекте больше нет runtime-зависимости от `ffmpeg`.
-Длинные записи автоматически разбиваются на внутренние чанки (~20 сек), чтобы избежать падений модели на больших входах.
-
-Ошибки возвращаются с соответствующим HTTP-кодом и JSON:
+Ответ:
 
 ```json
-{"detail": "описание ошибки"}
+{"text":"распознанный текст","duration":2.5}
 ```
 
-| Код | Описание |
-|-----|----------|
-| 200 | Успех |
-| 400 | Некорректный файл (не WAV, стерео, пустой) |
-| 413 | Файл превышает лимит `MAX_UPLOAD_BYTES` |
-| 500 | Внутренняя ошибка |
+Поведение:
 
-### `POST /v1/audio/transcriptions` (Whisper/OpenAI-compatible)
+- `wav` поддерживается всегда
+- `.opus` поддерживается, если проект собран с `libopusfile`
+- многоканальные файлы автоматически downmix'ятся в mono перед ASR
+- длинные файлы режутся внутри сервера на чанки примерно по 20 секунд
+- runtime-зависимости от `ffmpeg` нет
 
-OpenAI-совместимый роут для `openclaw/zeroclaw` и других клиентов.
-Также доступен алиас: `POST /audio/transcriptions`.
-Длинные записи обрабатываются чанками (внутренне), поэтому один большой файл возвращает обычный единый ответ без стриминга.
+Ошибки:
 
-Поддерживаемые multipart поля:
+```json
+{"detail":"описание ошибки"}
+```
+
+### `POST /v1/audio/transcriptions`
+
+OpenAI/Whisper-compatible роут. Алиас: `POST /audio/transcriptions`.
+
+Минимальный пример:
+
+```bash
+curl http://localhost:8081/v1/audio/transcriptions \
+  -F "file=@voice.wav" \
+  -F "model=whisper-1"
+```
+
+Поддерживаемые поля:
 
 | Поле | Обязательно | Описание |
 |------|-------------|----------|
-| `file` | да | Аудиофайл (`wav`, `opus` при сборке с `libopusfile`) |
-| `model` | да | Любая строка модели (`whisper-1`, `gpt-4o-mini-transcribe`, `whisper-large-v3-turbo`, ...) |
-| `language` | нет | Языковой хинт (например `ru`, `en`) |
+| `file` | да | Аудиофайл |
+| `model` | да | Любая строка модели |
+| `language` | нет | Языковой hint, например `ru` |
 | `prompt` | нет | Подсказка для стиля |
-| `response_format` | нет | `json` (по умолчанию), `text`, `srt`, `vtt`, `verbose_json` |
-| `temperature` | нет | Диапазон `[0,1]` |
-| `timestamp_granularities[]` | нет | `word`/`segment`, только с `response_format=verbose_json` |
-| `stream` | нет | Принимается как флаг запроса (ответ возвращается обычным HTTP body) |
+| `response_format` | нет | `json`, `text`, `srt`, `vtt`, `verbose_json` |
+| `temperature` | нет | От `0` до `1` |
+| `timestamp_granularities[]` | нет | `word` и/или `segment`, только для `verbose_json` |
+| `stream` | нет | Не поддерживается, запрос будет отклонён |
 
-Пример (openclaw/zeroclaw-совместимый JSON):
+Форматы:
 
-```bash
-curl http://localhost:8081/v1/audio/transcriptions \
-  -F "file=@voice.wav" \
-  -F "model=whisper-1" \
-  -F "response_format=json"
-```
+- `wav` поддерживается всегда
+- `.opus` поддерживается, если доступен `libopusfile`
+- многоканальные файлы автоматически downmix'ятся в mono перед ASR
 
-```json
-{"text":"распознанный текст"}
-```
-
-Пример text-формата:
-
-```bash
-curl http://localhost:8081/v1/audio/transcriptions \
-  -F "file=@voice.wav" \
-  -F "model=whisper-1" \
-  -F "response_format=text"
-```
-
-Ошибки возвращаются в OpenAI-совместимом виде:
+Ошибки возвращаются в OpenAI-compatible формате:
 
 ```json
 {
@@ -267,122 +214,155 @@ curl http://localhost:8081/v1/audio/transcriptions \
 }
 ```
 
-### `WS /v1/realtime` (OpenAI Realtime-compatible)
+### `WS /v1/realtime`
 
-Realtime-роут поддерживает `session.update` и `input_audio_buffer.*` события.
+OpenAI Realtime-compatible роут.
 
-Поддерживаемые входные форматы:
+Поддерживаемые входные события:
 
-| `session.input_audio_format` | Описание |
-|-----------------------------|----------|
-| `pcm16` | little-endian PCM16 (как раньше) |
-| `opus` | realtime Opus-пакеты с stateful decode |
+- `session.update`
+- `input_audio_buffer.append`
+- `input_audio_buffer.commit`
+- `input_audio_buffer.clear`
+- `ping` и `noop`
 
-Для `opus`:
-- По умолчанию при переключении на `opus` используется `session.input_sample_rate=48000` (RFC 7587 / WebRTC clock rate).
-- В `input_audio_buffer.append.audio` можно передавать base64:
-  - raw Opus payload (RTP payload),
-  - или целый RTP packet с Opus payload (заголовок RTP будет разобран на сервере).
-- Binary WS frame на `/v1/realtime` обрабатывается так же: как raw Opus payload или RTP packet.
-- Декодер `libopus` держит состояние между пакетами, использует PLC при потере и FEC при одиночных потерях (если FEC присутствует).
-- Рекомендуемый размер пакета: 20 ms.
+Поддерживаемые входные аудиоформаты:
 
-### `WS /ws`
+- `pcm16`
+- `opus`
 
-WebSocket для потокового распознавания:
+Минимальный flow:
 
-| Направление | Тип | Содержимое |
-|-------------|-----|-----------|
-| Клиент → Сервер | binary | float32 PCM-сэмплы (16 кГц, моно) |
-| Клиент → Сервер | text | `"RECOGNIZE"` — завершить сессию |
-| Клиент → Сервер | text | `"RESET"` — сбросить сессию |
-| Сервер → Клиент | text | `{"type": "interim", "duration": 1.5, "rms": 0.05, "is_speech": true}` |
-| Сервер → Клиент | text | `{"type": "final", "text": "...", "duration": 2.5}` |
-| Сервер → Клиент | text | `{"type": "done"}` |
-
-## Архитектура
-
-```
-Audio → [Resampling] → [VAD (Silero)] → [ASR (GigaAM/sherpa-onnx)] → Text
-          audio.cpp       vad.cpp            recognizer.cpp
+```json
+{"type":"session.update","event_id":"evt_1","session":{"input_audio_format":"pcm16","input_sample_rate":16000,"input_audio_transcription":{"model":"default","language":"ru"}}}
 ```
 
-- **VAD** сегментирует аудиопоток на фрагменты речи, отбрасывая тишину
-- **ASR** распознаёт каждый сегмент в текст (offline transducer)
-- **Метрики** отслеживают TTFR, RTF, длительность, ошибки и RMS
+```json
+{"type":"input_audio_buffer.append","event_id":"evt_2","audio":"<base64 pcm16>"}
+```
 
-## Тесты
+```json
+{"type":"input_audio_buffer.commit","event_id":"evt_3"}
+```
+
+Что важно знать:
+
+- сервер сам отправляет `session.created` при подключении
+- `input_audio_buffer.append` можно присылать и text JSON с base64, и binary frame
+- для `opus` при переключении формата без `input_sample_rate` сервер использует `48000`
+- если выбран `opus`, можно передавать raw Opus payload или RTP packet с Opus payload
+- сервер поддерживает только `turn_detection.type = "server_vad"` и валидирует его параметры
+- сервер эмитит `input_audio_buffer.speech_started`, `input_audio_buffer.speech_stopped`, `input_audio_buffer.committed`, `conversation.item.input_audio_transcription.completed` и `error`
+
+## Настройки через переменные окружения
+
+Ниже полная таблица переменных, которые реально читает сервер.
+
+### Сервер
+
+| Переменная | По умолчанию | Описание |
+|------------|-------------|----------|
+| `HOST` | `0.0.0.0` | Адрес привязки |
+| `HTTP_PORT` | `8081` | Порт HTTP/WS |
+| `THREADS` | число ядер | Потоки Drogon (`1..256`) |
+| `IDLE_CONNECTION_TIMEOUT_SEC` | `0` | Idle timeout TCP-соединения, `0` = не закрывать |
+
+### Модели и inference
+
+| Переменная | По умолчанию | Описание |
+|------------|-------------|----------|
+| `MODEL_DIR` | `models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16` | Путь к модели GigaAM |
+| `VAD_MODEL` | `models/silero_vad.onnx` | Путь к Silero VAD |
+| `PROVIDER` | `cpu` | `cpu` или `cuda` |
+| `NUM_THREADS` | `4` | Потоки распознавания (`1..128`) |
+| `SAMPLE_RATE` | `16000` | Целевая частота ASR (`8000..48000`) |
+| `FEATURE_DIM` | `64` | Размерность фичей |
+
+### Параллелизм и лимиты
+
+| Переменная | По умолчанию | Описание |
+|------------|-------------|----------|
+| `RECOGNIZER_POOL_SIZE` | `1` | Размер пула распознавателей (`1..256`) |
+| `MAX_CONCURRENT_REQUESTS` | `RECOGNIZER_POOL_SIZE` | Лимит одновременных HTTP-запросов |
+| `RECOGNIZER_WAIT_TIMEOUT_MS` | `30000` | Таймаут ожидания свободного recognizer slot |
+| `MAX_WS_CONNECTIONS` | `0` | Лимит одновременных realtime WS-соединений, `0` = без лимита |
+| `MAX_UPLOAD_BYTES` | `104857600` | Лимит файла для HTTP API |
+| `MAX_WS_MESSAGE_BYTES` | `4194304` | Лимит одного realtime WS-сообщения |
+
+### Аудио
+
+| Переменная | По умолчанию | Описание |
+|------------|-------------|----------|
+| `SILENCE_THRESHOLD` | `0.008` | RMS-порог тишины |
+| `MIN_AUDIO_SEC` | `0.5` | Минимальная длительность аудио |
+| `VAD_THRESHOLD` | `0.5` | Порог вероятности речи |
+| `VAD_MIN_SILENCE` | `0.5` | Минимальная тишина для конца сегмента, сек |
+| `VAD_MIN_SPEECH` | `0.25` | Минимальная длина речи, сек |
+| `VAD_MAX_SPEECH` | `20.0` | Максимальная длина сегмента, сек |
+| `VAD_WINDOW_SIZE` | `512` | Размер окна VAD (`64..4096`) |
+| `VAD_CONTEXT_SIZE` | `64` | Контекст VAD, должен быть меньше `VAD_WINDOW_SIZE` |
+
+### Практические рекомендации для production
+
+Обычно достаточно настроить только это:
+
+- `MODEL_DIR` и `VAD_MODEL`, если модели не лежат в `models/`
+- `RECOGNIZER_POOL_SIZE`, чтобы совпадал с доступным CPU budget
+- `MAX_CONCURRENT_REQUESTS`, чтобы защитить HTTP API от перегруза
+- `MAX_WS_CONNECTIONS`, чтобы защитить Realtime WebSocket API от OOM
+- `MAX_UPLOAD_BYTES` и `MAX_WS_MESSAGE_BYTES`, если сервис смотрит наружу
+
+## Docker
+
+CPU:
 
 ```bash
-# Быстрый прогон (debug)
+docker build -f Dockerfile -t asr-server-cpp .
+docker run --rm -p 8081:8081 asr-server-cpp
+```
+
+CUDA:
+
+```bash
+docker build -f Dockerfile.cuda -t asr-server-cpp:cuda .
+docker run --rm -p 8081:8081 --gpus all -e PROVIDER=cuda asr-server-cpp:cuda
+```
+
+Замечания:
+
+- CPU image собирается под текущую Docker platform
+- CUDA image опирается на prebuilt ONNX Runtime только для Linux `x64`
+- на ARM-хостах CUDA image нужно собирать с `--platform=linux/amd64`
+
+## Тесты и проверки
+
+Базовый цикл:
+
+```bash
 cmake --preset debug
-cmake --build build/debug -j$(nproc)
-LD_LIBRARY_PATH=build/debug/_deps/onnxruntime/lib build/debug/tests/asr_tests
-
-# Через ctest
+cmake --build --preset debug --parallel
 ctest --preset debug
+```
 
-# Полный прогон всех тестовых пресетов (debug/coverage/asan/tsan)
+Полезные команды:
+
+```bash
+cmake --build build/debug --target quality
+cmake --build build/debug --target quality-full
 ./scripts/test-presets.sh
 ```
 
-## Качество кода
+Подробности по quality workflow: [docs/QUALITY.md](docs/QUALITY.md)
 
-```bash
-# Форматирование
-cmake --build build/debug --target format        # применить
-cmake --build build/debug --target format-check  # проверить
+## Ограничения и нюансы
 
-# Статический анализ
-cmake --build build/debug --target lint          # clang-tidy
-cmake --build build/debug --target cppcheck      # cppcheck
-cmake --build build/debug --target iwyu          # include-what-you-use
-
-# Всё вместе
-cmake --build build/debug --target quality       # format-check + lint + cppcheck
-cmake --build build/debug --target quality-full  # + iwyu
-
-# Или через скрипты
-./scripts/check-all.sh build/debug               # format + lint + cppcheck
-./scripts/check-all.sh build/debug --with-iwyu   # + iwyu (если установлен)
-```
-
-Необходимые инструменты: `clang-format`, `clang-tidy`, `cppcheck`, `include-what-you-use` (опционально).
-
-## Структура проекта
-
-```
-asr-cpp/
-├── include/asr/        # Заголовки
-│   ├── config.h        # Конфигурация (env vars, валидация)
-│   ├── server.h        # HTTP/WebSocket сервер (drogon)
-│   ├── handler.h       # Сессия распознавания (VAD + ASR pipeline)
-│   ├── recognizer.h    # Обёртка sherpa-onnx (thread-safe)
-│   ├── vad.h           # Voice Activity Detection (Silero VAD + ONNX Runtime)
-│   ├── audio.h         # Декодирование WAV (dr_wav), ресемплинг (libsamplerate)
-│   ├── metrics.h       # Prometheus-метрики
-│   └── span.h          # C++17 span polyfill
-├── src/                # Реализация
-├── tests/              # GoogleTest тесты
-├── static/             # Web-интерфейс
-├── third_party/        # dr_wav.h
-├── scripts/            # Скрипты качества кода
-├── docs/               # Документация
-├── CMakeLists.txt
-├── CMakePresets.json
-├── Dockerfile          # CPU (distroless)
-└── Dockerfile.cuda     # CUDA (nvidia runtime)
-```
-
-## Ссылки
-
-- [GigaAM v3](https://github.com/salute-developers/GigaAM) — модель распознавания русской речи
-- [sherpa-onnx (k2-fsa)](https://github.com/k2-fsa/sherpa-onnx) — inference runtime для ASR/TTS
-- [Silero VAD](https://github.com/snakers4/silero-vad) — Voice Activity Detection
-- [ONNX Runtime](https://github.com/microsoft/onnxruntime) — inference engine
-- [Drogon](https://github.com/drogonframework/drogon) — HTTP/WebSocket framework
-- [prometheus-cpp](https://github.com/jupp0r/prometheus-cpp) — Prometheus клиент
+- `.wav` работает всегда; `.opus` в HTTP API требует `libopusfile`
+- file upload API автоматически сводит multi-channel аудио в mono
+- realtime Opus через WebSocket работает через `libopus`
+- сервер не зависит от `ffmpeg` во время выполнения
+- длинные HTTP файлы обрабатываются внутренними чанками, но ответ возвращается как единый результат
+- `WS /v1/realtime` совместим с основным OpenAI flow, но поддерживает только реализованные события из списка выше
 
 ## Лицензия
 
-Модель GigaAM v3 распространяется под лицензией [Creative Commons Attribution-NonCommercial-ShareAlike 4.0](https://github.com/salute-developers/GigaAM/blob/main/LICENSE). Silero VAD — под [MIT](https://github.com/snakers4/silero-vad/blob/master/LICENSE).
+Модель GigaAM v3 распространяется под лицензией [CC BY-NC-SA 4.0](https://github.com/salute-developers/GigaAM/blob/main/LICENSE). Silero VAD распространяется под [MIT](https://github.com/snakers4/silero-vad/blob/master/LICENSE).

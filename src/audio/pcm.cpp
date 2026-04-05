@@ -1,6 +1,8 @@
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <numeric>
+#include <vector>
 
 #include "asr/audio.h"
 #include "asr/span.h"

@@ -3,101 +3,142 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GigaAM v3</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body data-mode="mic" data-recording="false" data-connection="disconnected">
     <div class="app">
-        <div class="card">
-            <div class="tabs">
-                <button class="tab active" data-tab="mic">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+        <aside class="sidebar">
+            <div class="sidebar-head">
+                <div class="brand">
+                    <div class="brand-mark">G</div>
+                    <div class="brand-text">
+                        <span class="brand-name">GigaAM v3</span>
+                        <span class="brand-desc">Распознавание речи</span>
+                    </div>
+                </div>
+                <div class="status-pill">
+                    <span class="status-dot" id="statusDot" data-role="status-dot"></span>
+                    <span id="statusText" data-role="status-text">Отключено</span>
+                </div>
+            </div>
+
+            <nav class="tabs" role="tablist">
+                <button class="tab active" data-tab="mic" type="button" aria-controls="tab-mic" aria-selected="true">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                         <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
                         <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
                     </svg>
                     Микрофон
                 </button>
-                <button class="tab" data-tab="file">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm-1 9h-2v2H9v-2H7v-2h2V7h2v2h2v2zm0-6V3.5L18.5 9H13z"/>
+                <button class="tab" data-tab="file" type="button" aria-controls="tab-file" aria-selected="false">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/>
                     </svg>
                     Файл
                 </button>
-            </div>
+            </nav>
 
-            <div class="tab-content active" id="tab-mic">
-                <div class="mic-container">
-                    <button class="mic-btn" id="micBtn">
-                        <svg viewBox="0 0 24 24">
-                            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/>
-                        </svg>
-                    </button>
-                    <p class="mic-status" id="micStatus">Нажмите, чтобы слушать</p>
-                    <div class="mic-device-row">
-                        <label class="mic-device-label" for="micDeviceSelect">Источник:</label>
-                        <select id="micDeviceSelect" class="mic-device-select">
-                            <option value="">Загрузка устройств...</option>
-                        </select>
-                        <button id="refreshDevicesBtn" class="mic-device-refresh" type="button" title="Обновить список">↻</button>
+            <div class="sidebar-body">
+                <div class="tab-content active" id="tab-mic" role="tabpanel">
+                    <div class="mic-panel">
+                        <button class="mic-btn" id="micBtn" type="button" aria-label="Запустить или остановить микрофон">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/>
+                            </svg>
+                        </button>
+                        <p class="mic-status" id="micStatus">Готов к распознаванию</p>
                     </div>
-                    <p class="mic-device-note" id="micDeviceNote">Выберите микрофон, если по умолчанию нет сигнала.</p>
-                    <canvas class="visualizer" id="visualizer"></canvas>
-                </div>
-            </div>
 
-            <div class="tab-content" id="tab-file">
-                <div class="upload-zone" id="uploadZone">
-                    <div class="upload-icon">
-                        <svg viewBox="0 0 24 24">
+                    <canvas class="visualizer" id="visualizer"></canvas>
+
+                    <div class="field">
+                        <label class="field-label" for="micDeviceSelect">Источник</label>
+                        <div class="field-row">
+                            <select id="micDeviceSelect" class="field-select">
+                                <option value="">Загрузка устройств...</option>
+                            </select>
+                            <button id="refreshDevicesBtn" class="btn-icon" type="button" title="Обновить список">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M17.65 6.35A7.96 7.96 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <p class="field-hint" id="micDeviceNote">Если сигнала нет, смените источник.</p>
+                    </div>
+                </div>
+
+                <div class="tab-content" id="tab-file" role="tabpanel">
+                    <div class="upload-zone" id="uploadZone">
+                        <svg class="upload-icon" width="28" height="28" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                             <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>
                         </svg>
+                        <p class="upload-title">Перетащите аудиофайл</p>
+                        <p class="upload-hint">или нажмите для выбора</p>
+                        <input type="file" class="file-input" id="fileInput" accept="audio/*">
                     </div>
-                    <p class="upload-text">Перетащите аудиофайл сюда</p>
-                    <p class="upload-hint">или нажмите для выбора &bull; WAV, MP3, OGG и др.</p>
-                    <input type="file" class="file-input" id="fileInput" accept="audio/*">
+
+                    <div class="file-info" id="fileInfo" style="display: none;">
+                        <div class="file-meta">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+                            </svg>
+                            <div>
+                                <div class="file-name" id="fileName"></div>
+                                <div class="file-size" id="fileSize"></div>
+                            </div>
+                        </div>
+                        <div class="file-actions">
+                            <button class="btn btn-primary" id="processBtn" type="button" data-label="Сервер">Сервер</button>
+                            <button class="btn btn-secondary" id="processWhisperBtn" type="button" data-label="Whisper">Whisper</button>
+                        </div>
+                    </div>
                 </div>
-                <div class="file-info" id="fileInfo" style="display: none;">
-                    <div class="icon">
-                        <svg viewBox="0 0 24 24">
-                            <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
-                        </svg>
-                    </div>
-                    <div class="details">
-                        <div class="name" id="fileName"></div>
-                        <div class="size" id="fileSize"></div>
-                    </div>
-                    <div class="file-actions">
-                        <button class="btn btn-primary" id="processBtn">Распознать (WS)</button>
-                        <button class="btn btn-secondary" id="processWhisperBtn">Whisper API</button>
-                    </div>
-                </div>
+            </div>
+
+            <div class="sidebar-foot">
+                <p class="session-hint" data-role="session-hint">Нажмите на кнопку записи.</p>
                 <a href="models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16/test_wavs/example.wav"
-                   download class="test-file-link">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                   download class="test-link">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
                     </svg>
-                    Скачать тестовый файл (example.wav)
+                    Скачать тестовый WAV
                 </a>
             </div>
-        </div>
+        </aside>
 
-        <div class="card">
-            <div class="results-header">
-                <span class="results-title">Результаты</span>
-                <div class="connection-status">
-                    <span class="status-dot" id="statusDot"></span>
-                    <span id="statusText">Отключено</span>
+        <main class="transcript">
+            <div class="transcript-head">
+                <h2 class="transcript-title">Расшифровка</h2>
+                <div class="transcript-toolbar">
+                    <span class="transcript-count"><span id="resultsCount">0</span> фрагм.</span>
+                    <button class="btn-clear" id="clearResultsBtn" type="button" disabled>Очистить</button>
                 </div>
             </div>
-            <div class="results-list" id="results">
+
+            <div class="transcript-body" id="results">
                 <div class="empty-state">
-                    <svg viewBox="0 0 24 24">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/>
                     </svg>
-                    <p>Результаты появятся здесь</p>
+                    <p class="empty-title">Начните запись</p>
+                    <p class="empty-text">Распознанный текст будет появляться здесь</p>
                 </div>
             </div>
-        </div>
+
+            <div class="transcript-live">
+                <span class="live-dot"></span>
+                <span class="live-text" id="heroTranscriptText">Ожидание...</span>
+            </div>
+        </main>
     </div>
+
+    <div hidden id="controlTitle"></div>
+    <div hidden id="controlDescription"></div>
 
     <script type="module">
         import { init } from './app.js';

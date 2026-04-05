@@ -1,40 +1,24 @@
 #include "asr/whisper_api.h"
 
+#include <math.h>
+
 #include <algorithm>
-#include <array>
-#include <cctype>
 #include <cmath>
+#include <exception>
 #include <iomanip>
-#include <limits>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
+
+#include "asr/string_utils.h"
+#include "nlohmann/detail/json_ref.hpp"
 
 namespace asr {
 namespace {
-
-std::string trim_copy(std::string_view input) {
-  size_t begin = 0;
-  while (begin < input.size() && std::isspace(static_cast<unsigned char>(input[begin])) != 0) {
-    ++begin;
-  }
-
-  size_t end = input.size();
-  while (end > begin && std::isspace(static_cast<unsigned char>(input[end - 1])) != 0) {
-    --end;
-  }
-  return std::string(input.substr(begin, end - begin));
-}
-
-std::string to_lower_ascii(std::string_view input) {
-  std::string out(input.begin(), input.end());
-  std::transform(out.begin(), out.end(), out.begin(),
-                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-  return out;
-}
 
 bool contains_timestamp_granularity(const std::vector<WhisperTimestampGranularity>& values,
                                     WhisperTimestampGranularity                     needle) {
@@ -61,7 +45,7 @@ std::vector<std::string> parse_multi_value_field(std::string_view raw) {
   std::stringstream        ss(normalized);
   std::string              part;
   while (std::getline(ss, part, ',')) {
-    auto trimmed = trim_copy(part);
+    auto trimmed = trim_ascii(part);
     if (trimmed.empty()) {
       continue;
     }
@@ -74,7 +58,7 @@ std::vector<std::string> parse_multi_value_field(std::string_view raw) {
   }
 
   if (values.empty()) {
-    auto fallback = trim_copy(raw);
+    auto fallback = trim_ascii(raw);
     if (!fallback.empty()) {
       values.push_back(std::move(fallback));
     }
@@ -83,7 +67,7 @@ std::vector<std::string> parse_multi_value_field(std::string_view raw) {
 }
 
 std::optional<bool> parse_bool_field(std::string_view raw) {
-  const auto value = to_lower_ascii(trim_copy(raw));
+  const auto value = to_lower_ascii(trim_ascii(raw));
   if (value == "true" || value == "1") {
     return true;
   }
@@ -94,7 +78,7 @@ std::optional<bool> parse_bool_field(std::string_view raw) {
 }
 
 std::optional<WhisperResponseFormat> parse_response_format(std::string_view raw) {
-  const auto value = to_lower_ascii(trim_copy(raw));
+  const auto value = to_lower_ascii(trim_ascii(raw));
   if (value == "json") {
     return WhisperResponseFormat::Json;
   }
@@ -114,7 +98,7 @@ std::optional<WhisperResponseFormat> parse_response_format(std::string_view raw)
 }
 
 std::optional<WhisperTimestampGranularity> parse_timestamp_granularity(std::string_view raw) {
-  const auto value = to_lower_ascii(trim_copy(raw));
+  const auto value = to_lower_ascii(trim_ascii(raw));
   if (value == "word") {
     return WhisperTimestampGranularity::Word;
   }
@@ -122,6 +106,20 @@ std::optional<WhisperTimestampGranularity> parse_timestamp_granularity(std::stri
     return WhisperTimestampGranularity::Segment;
   }
   return std::nullopt;
+}
+
+bool is_supported_whisper_model_alias(std::string_view model) {
+  const auto normalized = to_lower_ascii(trim_ascii(model));
+  return normalized == "whisper-1" || normalized == "gpt-4o-mini-transcribe" ||
+         normalized == "whisper-large-v3-turbo" || normalized == "default" || normalized == "gigaam-v3";
+}
+
+bool is_supported_whisper_language_hint(std::string_view language) {
+  if (trim_ascii(language).empty()) {
+    return true;
+  }
+  const auto normalized = to_lower_ascii(trim_ascii(language));
+  return normalized == "ru" || normalized == "ru-ru" || normalized == "russian";
 }
 
 std::string format_timestamp(double seconds, char decimal_separator) {
@@ -157,36 +155,6 @@ nlohmann::json build_verbose_segment(const WhisperTranscriptionResponsePayload& 
   return segment;
 }
 
-nlohmann::json build_verbose_words(const WhisperTranscriptionResponsePayload& payload) {
-  nlohmann::json           words_json = nlohmann::json::array();
-  std::vector<std::string> words;
-  {
-    std::istringstream text_stream(payload.text);
-    std::string        word;
-    while (text_stream >> word) {
-      words.push_back(word);
-    }
-  }
-
-  if (words.empty()) {
-    return words_json;
-  }
-
-  const double duration = std::max(0.0f, payload.duration_sec);
-  const double step     = duration / static_cast<double>(words.size());
-
-  for (size_t i = 0; i < words.size(); ++i) {
-    const double start = static_cast<double>(i) * step;
-    const double end   = (i + 1 == words.size()) ? duration : static_cast<double>(i + 1) * step;
-    words_json.push_back({
-        {"word", words[i]},
-        {"start", start},
-        {"end", end},
-    });
-  }
-  return words_json;
-}
-
 const std::string* find_field(const std::unordered_map<std::string, std::string>& form_fields,
                               std::string_view                                    key) {
   auto it = form_fields.find(std::string(key));
@@ -220,21 +188,35 @@ std::optional<WhisperApiValidationError> parse_whisper_transcription_request(
   WhisperTranscriptionRequest req;
 
   const std::string* model_field = find_field(form_fields, "model");
-  if (model_field == nullptr || trim_copy(*model_field).empty()) {
+  if (model_field == nullptr || trim_ascii(*model_field).empty()) {
     return make_validation_error("Missing required field 'model'", "model", "missing_field");
   }
-  req.model = trim_copy(*model_field);
+  req.model = trim_ascii(*model_field);
+  if (!is_supported_whisper_model_alias(req.model)) {
+    return make_validation_error(
+        "Unsupported 'model'. Supported aliases: whisper-1, gpt-4o-mini-transcribe, "
+        "whisper-large-v3-turbo, default, gigaam-v3",
+        "model", "unsupported_value");
+  }
 
   if (const auto* language = find_field(form_fields, "language"); language != nullptr) {
-    req.language = trim_copy(*language);
+    req.language = trim_ascii(*language);
+    if (!is_supported_whisper_language_hint(req.language)) {
+      return make_validation_error("Only Russian language hint is supported by this backend", "language",
+                                   "unsupported_value");
+    }
   }
 
   if (const auto* prompt = find_field(form_fields, "prompt"); prompt != nullptr) {
-    req.prompt = trim_copy(*prompt);
+    req.prompt = trim_ascii(*prompt);
+    if (!req.prompt.empty()) {
+      return make_validation_error("'prompt' is not supported by this backend", "prompt",
+                                   "unsupported_value");
+    }
   }
 
   if (const auto* response_format = find_field(form_fields, "response_format");
-      response_format != nullptr && !trim_copy(*response_format).empty()) {
+      response_format != nullptr && !trim_ascii(*response_format).empty()) {
     auto parsed = parse_response_format(*response_format);
     if (!parsed.has_value()) {
       return make_validation_error("Invalid 'response_format'. Supported: json, text, srt, verbose_json, vtt",
@@ -244,28 +226,36 @@ std::optional<WhisperApiValidationError> parse_whisper_transcription_request(
   }
 
   if (const auto* temperature = find_field(form_fields, "temperature");
-      temperature != nullptr && !trim_copy(*temperature).empty()) {
+      temperature != nullptr && !trim_ascii(*temperature).empty()) {
     try {
-      req.temperature = std::stod(trim_copy(*temperature));
+      req.temperature = std::stod(trim_ascii(*temperature));
     } catch (const std::exception&) {
       return make_validation_error("Invalid numeric value for 'temperature'", "temperature");
     }
     if (!std::isfinite(*req.temperature) || *req.temperature < 0.0 || *req.temperature > 1.0) {
       return make_validation_error("'temperature' must be in range [0, 1]", "temperature");
     }
+    if (*req.temperature != 0.0) {
+      return make_validation_error("Only temperature=0 is supported by this backend", "temperature",
+                                   "unsupported_value");
+    }
   }
 
   if (const auto* stream_field = find_field(form_fields, "stream");
-      stream_field != nullptr && !trim_copy(*stream_field).empty()) {
+      stream_field != nullptr && !trim_ascii(*stream_field).empty()) {
     auto parsed = parse_bool_field(*stream_field);
     if (!parsed.has_value()) {
       return make_validation_error("Invalid boolean value for 'stream'", "stream");
     }
     req.stream = *parsed;
+    if (req.stream) {
+      return make_validation_error("'stream=true' is not supported by this backend", "stream",
+                                   "unsupported_value");
+    }
   }
 
   if (const auto* include = find_field(form_fields, "include[]");
-      include != nullptr && !trim_copy(*include).empty()) {
+      include != nullptr && !trim_ascii(*include).empty()) {
     for (const auto& token : parse_multi_value_field(*include)) {
       const auto lowered = to_lower_ascii(token);
       if (lowered == "logprobs") {
@@ -277,7 +267,7 @@ std::optional<WhisperApiValidationError> parse_whisper_transcription_request(
   }
 
   if (const auto* include = find_field(form_fields, "include");
-      include != nullptr && !trim_copy(*include).empty()) {
+      include != nullptr && !trim_ascii(*include).empty()) {
     for (const auto& token : parse_multi_value_field(*include)) {
       const auto lowered = to_lower_ascii(token);
       if (lowered == "logprobs") {
@@ -289,24 +279,34 @@ std::optional<WhisperApiValidationError> parse_whisper_transcription_request(
   }
 
   if (const auto* granularities = find_field(form_fields, "timestamp_granularities[]");
-      granularities != nullptr && !trim_copy(*granularities).empty()) {
+      granularities != nullptr && !trim_ascii(*granularities).empty()) {
     for (const auto& token : parse_multi_value_field(*granularities)) {
       auto parsed = parse_timestamp_granularity(token);
       if (!parsed.has_value()) {
         return make_validation_error("Invalid 'timestamp_granularities[]'. Supported: word, segment",
                                      "timestamp_granularities[]");
       }
+      if (*parsed == WhisperTimestampGranularity::Word) {
+        return make_validation_error(
+            "'timestamp_granularities[]=word' is not supported by this backend; use 'segment' instead",
+            "timestamp_granularities[]", "unsupported_value");
+      }
       append_timestamp_granularity_unique(&req.timestamp_granularities, *parsed);
     }
   }
 
   if (const auto* granularities = find_field(form_fields, "timestamp_granularities");
-      granularities != nullptr && !trim_copy(*granularities).empty()) {
+      granularities != nullptr && !trim_ascii(*granularities).empty()) {
     for (const auto& token : parse_multi_value_field(*granularities)) {
       auto parsed = parse_timestamp_granularity(token);
       if (!parsed.has_value()) {
         return make_validation_error("Invalid 'timestamp_granularities'. Supported: word, segment",
                                      "timestamp_granularities");
+      }
+      if (*parsed == WhisperTimestampGranularity::Word) {
+        return make_validation_error(
+            "'timestamp_granularities=word' is not supported by this backend; use 'segment' instead",
+            "timestamp_granularities", "unsupported_value");
       }
       append_timestamp_granularity_unique(&req.timestamp_granularities, *parsed);
     }
@@ -376,9 +376,6 @@ WhisperRenderedResponse render_whisper_transcription_response(
     granularities.push_back(WhisperTimestampGranularity::Segment);
   }
 
-  if (contains_timestamp_granularity(granularities, WhisperTimestampGranularity::Word)) {
-    j["words"] = build_verbose_words(payload);
-  }
   if (contains_timestamp_granularity(granularities, WhisperTimestampGranularity::Segment)) {
     j["segments"] = nlohmann::json::array({build_verbose_segment(payload)});
   }

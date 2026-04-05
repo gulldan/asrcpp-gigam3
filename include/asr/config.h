@@ -38,8 +38,10 @@ struct Config {
   int   vad_context_size = 64;
 
   // Concurrency
-  int    recognizer_pool_size    = 1;  // default = 1
-  size_t max_concurrent_requests = 0;  // 0 = auto = threads * 2
+  int    recognizer_pool_size       = 1;  // default = 1
+  size_t max_concurrent_requests    = 0;  // 0 = auto = recognizer_pool_size
+  size_t recognizer_wait_timeout_ms = 30000;
+  size_t max_ws_connections         = 0;  // 0 = unlimited
 
   // Audio
   float  silence_threshold       = 0.008f;

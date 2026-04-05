@@ -5,13 +5,14 @@
 #include <optional>
 #include <string>
 
-#include "asr/config.h"
 #include "asr/vad.h"
 
 namespace asr {
 
+struct Config;
+
 struct RealtimeSessionConfig {
-  std::string input_audio_format = "pcm16";  // pcm16 | opus | g711_ulaw | g711_alaw
+  std::string input_audio_format = "pcm16";  // pcm16 | opus | opus_raw | opus_rtp
   int         input_sample_rate  = 16000;
 
   struct InputAudioTranscription {
@@ -69,7 +70,6 @@ class RealtimeSession {
   [[nodiscard]] std::string    next_event_id();
   [[nodiscard]] std::string    next_item_id();
 
-  uint64_t              connection_id_ = 0;
   std::string           session_id_;
   RealtimeSessionConfig config_;
   uint64_t              event_seq_ = 0;

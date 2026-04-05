@@ -1,29 +1,13 @@
 #include "asr/offline_transcription.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
+#include <cstddef>
 #include <stdexcept>
-#include <string_view>
+
+#include "asr/string_utils.h"
 
 namespace asr {
-namespace {
-
-std::string trim_ascii(std::string_view input) {
-  size_t begin = 0;
-  while (begin < input.size() && std::isspace(static_cast<unsigned char>(input[begin])) != 0) {
-    ++begin;
-  }
-
-  size_t end = input.size();
-  while (end > begin && std::isspace(static_cast<unsigned char>(input[end - 1])) != 0) {
-    --end;
-  }
-
-  return std::string(input.substr(begin, end - begin));
-}
-
-}  // namespace
 
 std::string recognize_audio_chunked(span<const float> audio, int sample_rate, float max_chunk_sec,
                                     const RecognizeChunkFn& recognize_chunk) {
