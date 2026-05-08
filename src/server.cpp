@@ -1,6 +1,5 @@
 #include "asr/server.h"
 
-#include <_string.h>
 #include <drogon/DrObject.h>
 #include <drogon/HttpAppFramework.h>
 #include <drogon/HttpRequest.h>

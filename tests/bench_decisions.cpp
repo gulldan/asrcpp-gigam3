@@ -4,8 +4,6 @@
 //   6. live_chunk_ reserve strategy
 //   10. ChunkEmitter compaction strategy (erase-compact vs ring buffer)
 
-#include <_stdio.h>
-
 #include <algorithm>
 #include <array>
 #include <atomic>

@@ -1,6 +1,5 @@
 #include "asr/vad.h"
 
-#include <_string.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>

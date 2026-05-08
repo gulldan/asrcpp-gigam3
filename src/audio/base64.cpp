@@ -1,5 +1,3 @@
-#include <_ctype.h>
-
 #include <cctype>
 #include <cstdint>
 #include <string_view>

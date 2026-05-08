@@ -1,7 +1,5 @@
 #include "asr/executor.h"
 
-#include <_stdio.h>
-
 #include <cstdio>
 #include <exception>
 #include <stdexcept>

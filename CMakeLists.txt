@@ -98,7 +98,7 @@ set(FETCHCONTENT_BASE_DIR "${CMAKE_SOURCE_DIR}/build/_shared_deps/fetchcontent" 
 set(SPDLOG_FMT_EXTERNAL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(spdlog
     GIT_REPOSITORY https://github.com/gabime/spdlog.git
-    GIT_TAG        v1.16.0
+    GIT_TAG        v1.17.0
     GIT_SHALLOW    TRUE
 )
 
@@ -141,7 +141,7 @@ set(BUILD_SQLITE OFF CACHE BOOL "" FORCE)
 set(BUILD_REDIS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(drogon
     GIT_REPOSITORY https://github.com/drogonframework/drogon.git
-    GIT_TAG        v1.9.11
+    GIT_TAG        v1.9.13
     GIT_SHALLOW    TRUE
 )
 
@@ -155,18 +155,32 @@ endforeach()
 
 # 6. onnxruntime (prebuilt binaries — not a CMake project, download manually)
 option(ASR_ENABLE_CUDA "Enable GPU onnxruntime" OFF)
-set(ONNXRUNTIME_VERSION "1.23.2")
+set(ONNXRUNTIME_VERSION "1.25.1")
 set(ONNXRUNTIME_CACHE_ROOT "${CMAKE_SOURCE_DIR}/build/_shared_deps/onnxruntime" CACHE PATH
     "Shared ONNX Runtime cache directory across CMake presets")
 
-string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" ASR_SYSTEM_PROCESSOR)
+# Select ONNX Runtime for the CMake target platform, not for the machine
+# running configure. For normal native builds those are the same; for Docker
+# multi-platform builds and toolchain builds CMAKE_SYSTEM_* describes the target.
+set(ASR_TARGET_PROCESSOR "${CMAKE_SYSTEM_PROCESSOR}")
+if(APPLE AND DEFINED CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL "")
+    list(LENGTH CMAKE_OSX_ARCHITECTURES ASR_OSX_ARCH_COUNT)
+    if(NOT ASR_OSX_ARCH_COUNT EQUAL 1)
+        message(FATAL_ERROR
+            "ONNX Runtime ${ONNXRUNTIME_VERSION} prebuilt macOS packages are not universal.\n"
+            "Use a single CMAKE_OSX_ARCHITECTURES value.")
+    endif()
+    list(GET CMAKE_OSX_ARCHITECTURES 0 ASR_TARGET_PROCESSOR)
+endif()
+
+string(TOLOWER "${ASR_TARGET_PROCESSOR}" ASR_SYSTEM_PROCESSOR)
 if(ASR_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64)$")
     set(ONNXRUNTIME_ARCH "x64")
 elseif(ASR_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
     set(ONNXRUNTIME_ARCH "aarch64")
 else()
     message(FATAL_ERROR
-        "Unsupported CPU architecture for prebuilt ONNX Runtime: ${CMAKE_SYSTEM_PROCESSOR}.\n"
+        "Unsupported CPU architecture for prebuilt ONNX Runtime: ${ASR_TARGET_PROCESSOR}.\n"
         "Supported values: x86_64/amd64, aarch64/arm64.")
 endif()
 
@@ -175,17 +189,17 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         if(NOT ONNXRUNTIME_ARCH STREQUAL "x64")
             message(FATAL_ERROR
                 "CUDA prebuilt ONNX Runtime is only available for x64.\n"
-                "Current architecture: ${CMAKE_SYSTEM_PROCESSOR}.\n"
+                "Current architecture: ${ASR_TARGET_PROCESSOR}.\n"
                 "Use CPU build or build Docker image with --platform=linux/amd64.")
         endif()
         set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-linux-${ONNXRUNTIME_ARCH}-gpu-${ONNXRUNTIME_VERSION}")
-        set(ONNXRUNTIME_SHA256 "2083e361072a79ce16a90dcd5f5cb3ab92574a82a3ce0ac01e5cfa3158176f53")
+        set(ONNXRUNTIME_SHA256 "ddfc4ca4ccc9cd5345d3820edab710ee84e749569d052eed92c42693d3b448a8")
     else()
         set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-linux-${ONNXRUNTIME_ARCH}-${ONNXRUNTIME_VERSION}")
         if(ONNXRUNTIME_ARCH STREQUAL "x64")
-            set(ONNXRUNTIME_SHA256 "1fa4dcaef22f6f7d5cd81b28c2800414350c10116f5fdd46a2160082551c5f9b")
+            set(ONNXRUNTIME_SHA256 "eb566a49cfc49ef0642f809b69340b5bb656c7c4905ba873526d226f2c005816")
         elseif(ONNXRUNTIME_ARCH STREQUAL "aarch64")
-            set(ONNXRUNTIME_SHA256 "7c63c73560ed76b1fac6cff8204ffe34fe180e70d6582b5332ec094810241e5c")
+            set(ONNXRUNTIME_SHA256 "daa71b56b00c4ab34798a3d96ca41a32ece4d3e302dc2386d3cca83fd4491214")
         endif()
     endif()
     set(ONNXRUNTIME_LIB_BASENAME "libonnxruntime.so")
@@ -193,8 +207,13 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     if(ASR_ENABLE_CUDA)
         message(FATAL_ERROR "CUDA prebuilt ONNX Runtime is not available on macOS.")
     endif()
-    set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-osx-universal2-${ONNXRUNTIME_VERSION}")
-    set(ONNXRUNTIME_SHA256 "49ae8e3a66ccb18d98ad3fe7f5906b6d7887df8a5edd40f49eb2b14e20885809")
+    if(NOT ONNXRUNTIME_ARCH STREQUAL "aarch64")
+        message(FATAL_ERROR
+            "ONNX Runtime ${ONNXRUNTIME_VERSION} macOS prebuilt package is available only for arm64/aarch64.\n"
+            "Current architecture: ${ASR_TARGET_PROCESSOR}.")
+    endif()
+    set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-osx-arm64-${ONNXRUNTIME_VERSION}")
+    set(ONNXRUNTIME_SHA256 "18987ec3187b5f29ba798109750f6135060560ad4e0a52678fcc753ee8fb3091")
     set(ONNXRUNTIME_LIB_BASENAME "libonnxruntime.dylib")
 else()
     message(FATAL_ERROR
@@ -203,7 +222,7 @@ endif()
 
 message(STATUS
     "Using ONNX Runtime package '${ONNXRUNTIME_PACKAGE_NAME}' "
-    "for system '${CMAKE_SYSTEM_NAME}' and processor '${CMAKE_SYSTEM_PROCESSOR}'")
+    "for target system '${CMAKE_SYSTEM_NAME}' and processor '${ASR_TARGET_PROCESSOR}'")
 set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${ONNXRUNTIME_PACKAGE_NAME}.tgz")
 set(ONNXRUNTIME_ARCHIVE "${ONNXRUNTIME_CACHE_ROOT}/${ONNXRUNTIME_PACKAGE_NAME}.tgz")
 set(ONNXRUNTIME_DIR "${ONNXRUNTIME_CACHE_ROOT}/${ONNXRUNTIME_PACKAGE_NAME}")
@@ -268,9 +287,9 @@ set(SHERPA_ONNX_USE_PRE_INSTALLED_ONNXRUNTIME_IF_AVAILABLE ON CACHE BOOL "" FORC
 set(ENV{SHERPA_ONNXRUNTIME_INCLUDE_DIR} "${ONNXRUNTIME_DIR}/include")
 set(ENV{SHERPA_ONNXRUNTIME_LIB_DIR} "${ONNXRUNTIME_DIR}/lib")
 
-# Pin to the exact commit behind v1.12.31 so FetchContent stays reproducible
+# Pin to the exact commit behind v1.13.1 so FetchContent stays reproducible
 # even if the upstream tag is ever re-pointed.
-set(SHERPA_ONNX_GIT_TAG "e0ab4a8beb10477d25ef48e518a537995c38c698")
+set(SHERPA_ONNX_GIT_TAG "f3b1a9da8d6e0e6cdb21387d41d25f8c8e10d3cc")
 
 FetchContent_Declare(sherpa_onnx
     GIT_REPOSITORY https://github.com/k2-fsa/sherpa-onnx.git
