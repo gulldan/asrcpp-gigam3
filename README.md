@@ -28,7 +28,7 @@ Ubuntu / Debian:
 
 ```bash
 sudo apt install build-essential cmake pkg-config libssl-dev zlib1g-dev libopus-dev
-# Опционально: поддержка .opus файлов в HTTP API
+# Опционально: поддержка .opus/.ogg Ogg Opus файлов в HTTP API
 sudo apt install libopusfile-dev
 ```
 
@@ -36,7 +36,7 @@ macOS:
 
 ```bash
 brew install cmake pkg-config openssl opus
-# Опционально: поддержка .opus файлов в HTTP API
+# Опционально: поддержка .opus/.ogg Ogg Opus файлов в HTTP API
 brew install opusfile
 ```
 
@@ -159,7 +159,7 @@ curl -F "file=@audio.wav" http://localhost:8081/recognize
 Поведение:
 
 - `wav` поддерживается всегда
-- `.opus` поддерживается, если проект собран с `libopusfile`
+- `.opus` и `.ogg` с Opus внутри поддерживаются, если проект собран с `libopusfile`
 - многоканальные файлы автоматически downmix'ятся в mono перед ASR
 - длинные файлы режутся внутри сервера на чанки примерно по 20 секунд
 - runtime-зависимости от `ffmpeg` нет
@@ -198,7 +198,7 @@ curl http://localhost:8081/v1/audio/transcriptions \
 Форматы:
 
 - `wav` поддерживается всегда
-- `.opus` поддерживается, если доступен `libopusfile`
+- `.opus` и `.ogg` с Opus внутри поддерживаются, если доступен `libopusfile`
 - многоканальные файлы автоматически downmix'ятся в mono перед ASR
 
 Ошибки возвращаются в OpenAI-compatible формате:
@@ -356,7 +356,7 @@ cmake --build build/debug --target quality-full
 
 ## Ограничения и нюансы
 
-- `.wav` работает всегда; `.opus` в HTTP API требует `libopusfile`
+- `.wav` работает всегда; `.opus` и `.ogg` с Opus внутри в HTTP API требуют `libopusfile`
 - file upload API автоматически сводит multi-channel аудио в mono
 - realtime Opus через WebSocket работает через `libopus`
 - сервер не зависит от `ffmpeg` во время выполнения

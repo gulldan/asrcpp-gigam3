@@ -139,6 +139,7 @@ set(BUILD_POSTGRESQL OFF CACHE BOOL "" FORCE)
 set(BUILD_MYSQL OFF CACHE BOOL "" FORCE)
 set(BUILD_SQLITE OFF CACHE BOOL "" FORCE)
 set(BUILD_REDIS OFF CACHE BOOL "" FORCE)
+set(TRANTOR_USE_TLS "" CACHE STRING "TLS provider for Trantor (empty = auto-detect)" FORCE)
 FetchContent_Declare(drogon
     GIT_REPOSITORY https://github.com/drogonframework/drogon.git
     GIT_TAG        v1.9.13

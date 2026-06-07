@@ -49,7 +49,7 @@ using AudioChunkCallback = std::function<void(span<const float> chunk)>;
 AudioData decode_wav(span<const uint8_t> data, int target_rate = 16000);
 
 // Decode supported Whisper API audio formats from memory buffer
-// (wav and optionally opus if built with libopusfile), resample to target_rate.
+// (wav and optionally ogg/opus if built with libopusfile), resample to target_rate.
 // The file_name is used to detect container format.
 AudioData decode_audio(span<const uint8_t> data, std::string_view file_name, int target_rate = 16000);
 

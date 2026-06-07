@@ -53,6 +53,24 @@ std::vector<float> make_sine(float freq, float duration_sec, int sample_rate) {
   return samples;
 }
 
+#ifdef ASR_HAS_OPUSFILE
+std::vector<uint8_t> make_ogg_opus() {
+  return base64_decode(
+      "T2dnUwACAAAAAAAAAADKSu7xAAAAAIyutSsBE09wdXNIZWFkAQE4AYC7AAAAAABPZ2dTAAAAAAAAAAAAAMpK7vEBAAAAwzkx1QE+"
+      "T3B1c1RhZ3MNAAAATGF2ZjYyLjEyLjEwMQEAAAAdAAAAZW5jb2Rlcj1MYXZjNjIuMjguMTAxIGxpYm9wdXNPZ2dTAAS4JgAAAAAA"
+      "AMpK7vECAAAA40ql8gs8PDw8PDw8PDw8PHiBqLA2CJ/CATyprOB8RAi6c+X7hSf8NMn6by1tBSFRkY/WOevmV7m/koyIOEwULcMT"
+      "nsbUETnrgqM4BHinGQDZb/o6GyaOl8LJsb4NS94rH8N53tYoSWiakiyyImilr5TF6W0A/oo+F0fdN+Sc17JuntmuWUTQvXibKx91"
+      "nPxLVRxSIKTD0SdtRv2YjtlJiJrKlhNOZ2GrlhAaW0WkMjPyrsTYiLmVeO64FW5/9fK+CSiRBHiajfKwk7qLTMPGKhNvbabVa/x+"
+      "V/M3rUOlwQgBbpg25SNlx4/+ossMkVCBtxQ6k1oZEbjUr5qPdxqHBXibUIyal7+qJe+tSNap38JpD0wmyPCY8l38AZBep1idtexO"
+      "SeHG4BUgYQPirg1Ft8/xc/LXi6WbOmtUDHiaOp91nPxJMTIqcMtXZT6llWqjvI5ryMMMY8MNJWyXQEMBc3kdvPCwJaas+4w/QT/T"
+      "puvxZfgHFE+qTXiaOp91nPxF716WR06ShKZi2S3rmT3VjImk/WgIvsI8M7IbEhHFfD5OPQrCFJslcLVYG+22PBwPaQdPBHiaOp9z"
+      "LdIzVRL+A0vPHbs0qgMrk3xQRrIYxZWtmPIEk5KtzqaeY4/E0iyJh9gffDP9oFW5/9fdfPcsBHiaOp91nPxJSjdsWSqoATTeLxvW"
+      "bryhvFQ5Z8gtfCsbY12srQgNrv41exjwfGkuJ/AMctd1DoCNC02xTUtBAJj4RWk7/w5HMjz3K52mvRuJY+ElA+9EVj0k4JY88oqj"
+      "v6GPXe3yDSfZJED4QvkyWJMxNjitlYc/gEtBAAOWOj4QLtCtj8NC8mhvuxrGOVvp1zbl5UvVm/ScsuCgwUJKn8z7htveY850ZoCF"
+      "BY+1PhoYGj3tSA==");
+}
+#endif
+
 TEST(Audio, DecodeMono16kHz) {
   auto sine     = make_sine(440.0f, 1.0f, 16000);
   auto wav_data = make_wav(sine, 16000);
@@ -226,6 +244,22 @@ TEST(Audio, DecodeAudioRejectsUnsupportedExtension) {
   }
 }
 
+TEST(Audio, WhisperAudioExtensionSupportMatchesBuild) {
+  EXPECT_TRUE(is_supported_whisper_audio_extension("wav"));
+  EXPECT_TRUE(is_supported_whisper_audio_extension(".WAV"));
+
+#ifdef ASR_HAS_OPUSFILE
+  EXPECT_TRUE(is_supported_whisper_audio_extension("opus"));
+  EXPECT_TRUE(is_supported_whisper_audio_extension(".ogg"));
+  EXPECT_TRUE(is_supported_whisper_audio_extension("OGG"));
+#else
+  EXPECT_FALSE(is_supported_whisper_audio_extension("opus"));
+  EXPECT_FALSE(is_supported_whisper_audio_extension(".ogg"));
+#endif
+
+  EXPECT_FALSE(is_supported_whisper_audio_extension("aac"));
+}
+
 TEST(Audio, DecodeAudioWav) {
   auto sine     = make_sine(440.0f, 0.75f, 16000);
   auto wav_data = make_wav(sine, 16000);
@@ -235,6 +269,25 @@ TEST(Audio, DecodeAudioWav) {
   EXPECT_FALSE(audio.samples.empty());
   EXPECT_NEAR(audio.duration_sec, 0.75f, 0.02f);
 }
+
+#ifdef ASR_HAS_OPUSFILE
+TEST(Audio, DecodeAudioOggOpus) {
+  const auto audio = decode_audio(make_ogg_opus(), "voice.ogg", 16000);
+  EXPECT_FALSE(audio.samples.empty());
+  EXPECT_NEAR(audio.duration_sec, 0.2f, 0.04f);
+}
+
+TEST(Audio, DecodeAudioStreamedOggOpus) {
+  std::vector<float> streamed;
+  const auto         stats = decode_audio_streamed(
+      make_ogg_opus(), "voice.ogg", 16000, 512U,
+      [&streamed](span<const float> chunk) { streamed.insert(streamed.end(), chunk.begin(), chunk.end()); });
+
+  EXPECT_FALSE(streamed.empty());
+  EXPECT_EQ(stats.samples, streamed.size());
+  EXPECT_NEAR(stats.duration_sec, 0.2f, 0.04f);
+}
+#endif
 
 TEST(Audio, DecodeAudioStreamedWav) {
   auto sine     = make_sine(220.0f, 1.3f, 16000);

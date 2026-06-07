@@ -30,7 +30,7 @@ WORKDIR /build
 # ============================================
 # Stage 2: Web frontend build
 # ============================================
-FROM oven/bun:1.3.13 AS web-builder
+FROM oven/bun:1.3.14 AS web-builder
 
 WORKDIR /build
 

@@ -34,11 +34,17 @@ std::string extension_from_filename(std::string_view file_name) {
 
 std::string supported_audio_extensions_list() {
 #ifdef ASR_HAS_OPUSFILE
-  return "opus, wav";
+  return "ogg, opus, wav";
 #else
   return "wav";
 #endif
 }
+
+#ifdef ASR_HAS_OPUSFILE
+bool is_ogg_opus_extension(std::string_view extension) {
+  return extension == "ogg" || extension == "opus";
+}
+#endif
 
 void downmix_interleaved_to_mono(span<const float> interleaved, int channels, std::vector<float>& mono_out) {
   if (channels <= 0) {
@@ -548,7 +554,7 @@ bool is_supported_whisper_audio_extension(std::string_view extension) {
   }
 
 #ifdef ASR_HAS_OPUSFILE
-  return normalized == "wav" || normalized == "opus";
+  return normalized == "wav" || is_ogg_opus_extension(normalized);
 #else
   return normalized == "wav";
 #endif
@@ -570,7 +576,7 @@ AudioData decode_audio(span<const uint8_t> data, std::string_view file_name, int
   }
 
 #ifdef ASR_HAS_OPUSFILE
-  if (extension == "opus") {
+  if (is_ogg_opus_extension(extension)) {
     return decode_opus_file(data, target_rate);
   }
 #endif
@@ -596,7 +602,7 @@ AudioStreamStats decode_audio_streamed(span<const uint8_t> data, std::string_vie
   }
 
 #ifdef ASR_HAS_OPUSFILE
-  if (extension == "opus") {
+  if (is_ogg_opus_extension(extension)) {
     return decode_opus_file_streamed(data, target_rate, chunk_samples, on_chunk);
   }
 #endif
