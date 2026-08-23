@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.26.0
 #
 # Build from repository root:
 #   docker build -f Dockerfile.cuda -t asr-server-cpp:cuda .
@@ -30,7 +30,7 @@ WORKDIR /build
 # ============================================
 # Stage 2: Web frontend build
 # ============================================
-FROM oven/bun:1.3.14 AS web-builder
+FROM oven/bun:1.4.0 AS web-builder
 
 WORKDIR /build
 
@@ -111,7 +111,7 @@ WORKDIR /app
 COPY --from=builder /build/build/cuda/asr-server /app/asr-server
 
 # Copy onnxruntime shared library (downloaded by FetchContent)
-COPY --from=builder /build/build/_shared_deps/onnxruntime/onnxruntime-linux-x64-gpu-*/lib/libonnxruntime* /usr/local/lib/
+COPY --from=builder /build/build/_shared_deps/onnxruntime/onnxruntime-linux-x64-gpu_cuda12-*/lib/libonnxruntime* /usr/local/lib/
 RUN ldconfig
 
 # Copy static files and models

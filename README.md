@@ -53,7 +53,7 @@ mkdir -p models
 #    models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16
 
 # 2) Скачайте Silero VAD
-curl -L https://github.com/snakers4/silero-vad/raw/master/files/silero_vad.onnx \
+curl -L https://raw.githubusercontent.com/snakers4/silero-vad/v6.2.1/src/silero_vad/data/silero_vad.onnx \
   -o models/silero_vad.onnx
 ```
 

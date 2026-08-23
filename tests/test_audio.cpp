@@ -272,15 +272,17 @@ TEST(Audio, DecodeAudioWav) {
 
 #ifdef ASR_HAS_OPUSFILE
 TEST(Audio, DecodeAudioOggOpus) {
-  const auto audio = decode_audio(make_ogg_opus(), "voice.ogg", 16000);
+  const auto ogg_data = make_ogg_opus();
+  const auto audio    = decode_audio(ogg_data, "voice.ogg", 16000);
   EXPECT_FALSE(audio.samples.empty());
   EXPECT_NEAR(audio.duration_sec, 0.2f, 0.04f);
 }
 
 TEST(Audio, DecodeAudioStreamedOggOpus) {
+  const auto         ogg_data = make_ogg_opus();
   std::vector<float> streamed;
   const auto         stats = decode_audio_streamed(
-      make_ogg_opus(), "voice.ogg", 16000, 512U,
+      ogg_data, "voice.ogg", 16000, 512U,
       [&streamed](span<const float> chunk) { streamed.insert(streamed.end(), chunk.begin(), chunk.end()); });
 
   EXPECT_FALSE(streamed.empty());
