@@ -15,7 +15,7 @@
 #include "dr_wav.h"
 
 #ifdef ASR_HAS_OPUSFILE
-#include <opus/opusfile.h>
+#include <opusfile.h>
 #endif
 
 namespace asr {

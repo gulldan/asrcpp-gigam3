@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.26.0
+# syntax=docker/dockerfile:1.27.1
 #
 # Build from repository root:
 #   docker build -f Dockerfile.cuda -t asr-server-cpp:cuda .
@@ -6,7 +6,7 @@
 # ============================================
 # Stage 1: Toolchain base (CUDA)
 # ============================================
-FROM nvidia/cuda:12.8.0-devel-ubuntu24.04 AS build-base
+FROM nvidia/cuda:12.9.2-devel-ubuntu24.04 AS build-base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -30,7 +30,7 @@ WORKDIR /build
 # ============================================
 # Stage 2: Web frontend build
 # ============================================
-FROM oven/bun:1.4.0 AS web-builder
+FROM oven/bun:1.4.2 AS web-builder
 
 WORKDIR /build
 
@@ -89,7 +89,7 @@ RUN mkdir -p /build/runtime/uploads/tmp
 # ============================================
 # Stage 5: Runtime (CUDA)
 # ============================================
-FROM nvidia/cuda:12.8.0-runtime-ubuntu24.04 AS runtime
+FROM nvidia/cuda:12.9.2-runtime-ubuntu24.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 

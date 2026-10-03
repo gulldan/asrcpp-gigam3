@@ -12,7 +12,7 @@ const LOCAL_FILES = new Set(['/', '/index.html', '/app.js', '/app.js.map', '/sty
 
 type ProxySocketData = {
   targetUrl: string;
-  backlog: Array<string | ArrayBuffer | Uint8Array>;
+  backlog: Array<string | ArrayBuffer | Uint8Array<ArrayBuffer>>;
   upstream: WebSocket | null;
 };
 

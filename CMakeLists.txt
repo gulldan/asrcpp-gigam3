@@ -156,9 +156,7 @@ endforeach()
 
 # 6. onnxruntime (prebuilt binaries — not a CMake project, download manually)
 option(ASR_ENABLE_CUDA "Enable GPU onnxruntime" OFF)
-# 1.29.0 crashes while loading the model on Linux aarch64; 1.28.0 is the newest
-# release verified on both Linux x64 and aarch64.
-set(ONNXRUNTIME_VERSION "1.28.0")
+set(ONNXRUNTIME_VERSION "1.30.0")
 set(ONNXRUNTIME_CACHE_ROOT "${CMAKE_SOURCE_DIR}/build/_shared_deps/onnxruntime" CACHE PATH
     "Shared ONNX Runtime cache directory across CMake presets")
 
@@ -198,13 +196,13 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         # ONNX Runtime 1.27+ publishes CUDA-major-specific GPU archives.
         # The CUDA image uses the CUDA 12 build to retain support for older GPUs.
         set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-linux-${ONNXRUNTIME_ARCH}-gpu_cuda12-${ONNXRUNTIME_VERSION}")
-        set(ONNXRUNTIME_SHA256 "ea6bd2b65d7dfabbeb92c4af5dd8f12e5aed8601e544ad378d2f872275438b1a")
+        set(ONNXRUNTIME_SHA256 "f9886932ee7bb0b4d3fcab736a392d4ff5efaa0672b47f19f0cec03437cf64f1")
     else()
         set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-linux-${ONNXRUNTIME_ARCH}-${ONNXRUNTIME_VERSION}")
         if(ONNXRUNTIME_ARCH STREQUAL "x64")
-            set(ONNXRUNTIME_SHA256 "a3e1b79d7bb1bf09696ce675f49e4064e6c81f6202b8225624fff0e93f8d6407")
+            set(ONNXRUNTIME_SHA256 "a5ed5a3cac51fbb2e90da632ae43d19212faaa20e76484e62bcb7c23ddb3b3fd")
         elseif(ONNXRUNTIME_ARCH STREQUAL "aarch64")
-            set(ONNXRUNTIME_SHA256 "e15ff8b5d85afe6c144d97c6fd432254bf76a219daaf17658087d6ecb3e8f0bb")
+            set(ONNXRUNTIME_SHA256 "e16a27a8ed330bbc698df7330b0cf56e722f354e3bcc92118682c74ef3c3e3da")
         endif()
     endif()
     set(ONNXRUNTIME_LIB_BASENAME "libonnxruntime.so")
@@ -218,7 +216,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
             "Current architecture: ${ASR_TARGET_PROCESSOR}.")
     endif()
     set(ONNXRUNTIME_PACKAGE_NAME "onnxruntime-osx-arm64-${ONNXRUNTIME_VERSION}")
-    set(ONNXRUNTIME_SHA256 "1268b359718099bde2cedb55787f182a130067bc4f31e8c88478c445b850d3d8")
+    set(ONNXRUNTIME_SHA256 "6ebb5062a934537c352937821f9fe9718e7de1a2db1122a93dd363ffd53a7012")
     set(ONNXRUNTIME_LIB_BASENAME "libonnxruntime.dylib")
 else()
     message(FATAL_ERROR
@@ -292,9 +290,9 @@ set(SHERPA_ONNX_USE_PRE_INSTALLED_ONNXRUNTIME_IF_AVAILABLE ON CACHE BOOL "" FORC
 set(ENV{SHERPA_ONNXRUNTIME_INCLUDE_DIR} "${ONNXRUNTIME_DIR}/include")
 set(ENV{SHERPA_ONNXRUNTIME_LIB_DIR} "${ONNXRUNTIME_DIR}/lib")
 
-# Pin to the exact commit behind v1.13.6 so FetchContent stays reproducible
+# Pin to the exact commit behind v1.13.8 so FetchContent stays reproducible
 # even if the upstream tag is ever re-pointed.
-set(SHERPA_ONNX_GIT_TAG "1cb484af5e69d3c7803c1eb0b3b5ab8041e0e911")
+set(SHERPA_ONNX_GIT_TAG "11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf")
 
 FetchContent_Declare(sherpa_onnx
     GIT_REPOSITORY https://github.com/k2-fsa/sherpa-onnx.git

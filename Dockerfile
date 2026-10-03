@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.26.0
+# syntax=docker/dockerfile:1.27.1
 #
 # Build from repository root:
 #   docker build -f Dockerfile -t asr-server-cpp .
@@ -30,7 +30,7 @@ WORKDIR /build
 # ============================================
 # Stage 2: Web frontend build
 # ============================================
-FROM oven/bun:1.4.0 AS web-builder
+FROM oven/bun:1.4.2 AS web-builder
 
 WORKDIR /build
 

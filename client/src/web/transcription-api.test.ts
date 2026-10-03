@@ -25,7 +25,7 @@ describe('uploadFileToServer', () => {
         headers: { 'content-type': 'application/json' },
       });
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = Object.assign(fetchMock, { preconnect: originalFetch.preconnect });
 
     const result = await uploadFileToServer(new File(['wav'], 'sample.wav', { type: 'audio/wav' }));
     expect(result).toEqual({ text: 'привет мир', duration: 1.25 });
@@ -33,10 +33,10 @@ describe('uploadFileToServer', () => {
   });
 
   test('surfaces JSON error details from /recognize', async () => {
-    globalThis.fetch = mock(async () => new Response(JSON.stringify({ detail: 'File too large' }), {
+    globalThis.fetch = Object.assign(mock(async () => new Response(JSON.stringify({ detail: 'File too large' }), {
       status: 413,
       headers: { 'content-type': 'application/json' },
-    })) as typeof fetch;
+    })), { preconnect: originalFetch.preconnect });
 
     await expect(uploadFileToServer(new File(['wav'], 'sample.wav', { type: 'audio/wav' }))).rejects.toThrow(
       'File too large',
@@ -60,7 +60,7 @@ describe('uploadFileToWhisperApi', () => {
         headers: { 'content-type': 'application/json' },
       });
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = Object.assign(fetchMock, { preconnect: originalFetch.preconnect });
 
     const result = await uploadFileToWhisperApi(new File(['wav'], 'sample.wav', { type: 'audio/wav' }));
     expect(result).toEqual({ text: 'готово', duration: 2.5 });
@@ -68,10 +68,10 @@ describe('uploadFileToWhisperApi', () => {
   });
 
   test('parses plain-text whisper response', async () => {
-    globalThis.fetch = mock(async () => new Response('plain text transcript', {
+    globalThis.fetch = Object.assign(mock(async () => new Response('plain text transcript', {
       status: 200,
       headers: { 'content-type': 'text/plain' },
-    })) as typeof fetch;
+    })), { preconnect: originalFetch.preconnect });
 
     const result = await uploadFileToWhisperApi(new File(['wav'], 'sample.wav', { type: 'audio/wav' }));
     expect(result).toEqual({ text: 'plain text transcript', duration: null });

@@ -27,7 +27,7 @@
 Ubuntu / Debian:
 
 ```bash
-sudo apt install build-essential cmake pkg-config libssl-dev zlib1g-dev libopus-dev
+sudo apt install build-essential cmake pkg-config libssl-dev zlib1g-dev libopus-dev libjsoncpp-dev uuid-dev
 # Опционально: поддержка .opus/.ogg Ogg Opus файлов в HTTP API
 sudo apt install libopusfile-dev
 ```
@@ -35,7 +35,7 @@ sudo apt install libopusfile-dev
 macOS:
 
 ```bash
-brew install cmake pkg-config openssl opus
+brew install cmake pkg-config openssl opus jsoncpp
 # Опционально: поддержка .opus/.ogg Ogg Opus файлов в HTTP API
 brew install opusfile
 ```
@@ -53,7 +53,7 @@ mkdir -p models
 #    models/sherpa-onnx-nemo-transducer-punct-giga-am-v3-russian-2025-12-16
 
 # 2) Скачайте Silero VAD
-curl -L https://raw.githubusercontent.com/snakers4/silero-vad/v6.2.1/src/silero_vad/data/silero_vad.onnx \
+curl -L https://raw.githubusercontent.com/snakers4/silero-vad/v6.2.3/src/silero_vad/data/silero_vad.onnx \
   -o models/silero_vad.onnx
 ```
 

@@ -1,6 +1,6 @@
-#include <opus/opus.h>
-#include <opus/opus_defines.h>
-#include <opus/opus_types.h>
+#include <opus.h>
+#include <opus_defines.h>
+#include <opus_types.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
